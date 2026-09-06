@@ -1,3 +1,5 @@
+import { topologyEdgeCount } from "./arena-model.mjs";
+
 const phaseCopy = {
   create: {
     title: "The setup service creates a short-lived rendezvous point.",
@@ -73,10 +75,6 @@ function hostPositions(count) {
   return positions;
 }
 
-function connectionCount(kind, count) {
-  return kind === "mesh" ? (count * (count - 1)) / 2 : count - 1;
-}
-
 function renderTopology() {
   const count = Number(playerRange.value);
   playerOutput.value = String(count);
@@ -125,7 +123,7 @@ function renderTopology() {
     svg.append(label);
   }
 
-  const connections = connectionCount(topology, count);
+  const connections = topologyEdgeCount(topology, count);
   if (topology === "mesh") {
     topologyTitle.textContent = "Full mesh";
     topologyResult.textContent = `${count} players create ${connections} direct peer relationships. Each device maintains ${Math.max(0, count - 1)} WebRTC connections.`;
