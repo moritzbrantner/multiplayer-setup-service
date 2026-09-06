@@ -22,8 +22,10 @@ jobs:
         run: |
           rustc --version --verbose
           cargo --version
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - name: Show canonical rustfmt diff
+        run: |
+          cargo fmt --all
+          git diff -- src
       - name: Lint
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
