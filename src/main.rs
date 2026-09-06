@@ -213,10 +213,7 @@ async fn create_room(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn join_room(
-    State(state): State<AppState>,
-    Path(raw_room_id): Path<String>,
-) -> Response {
+async fn join_room(State(state): State<AppState>, Path(raw_room_id): Path<String>) -> Response {
     let Some(room_id) = validated_room_id(&raw_room_id) else {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -239,10 +236,7 @@ async fn join_room(
     }
 }
 
-async fn room_status(
-    State(state): State<AppState>,
-    Path(raw_room_id): Path<String>,
-) -> Response {
+async fn room_status(State(state): State<AppState>, Path(raw_room_id): Path<String>) -> Response {
     let Some(room_id) = validated_room_id(&raw_room_id) else {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -289,7 +283,7 @@ async fn connect_room(
     };
 
     let protocols = websocket_protocols(&headers);
-    if !protocols.iter().any(|protocol| protocol == WEBSOCKET_PROTOCOL) {
+    if !protocols.contains(&WEBSOCKET_PROTOCOL) {
         return error_response(
             StatusCode::UNAUTHORIZED,
             "invalid-credentials",
@@ -482,10 +476,7 @@ async fn relay_signal(
     }
 }
 
-async fn send_server(
-    socket: &mut WebSocket,
-    message: &ServerMessage,
-) -> Result<(), axum::Error> {
+async fn send_server(socket: &mut WebSocket, message: &ServerMessage) -> Result<(), axum::Error> {
     let text = serde_json::to_string(message).expect("server message should serialize");
     socket.send(Message::Text(text.into())).await
 }

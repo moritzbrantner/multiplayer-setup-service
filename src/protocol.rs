@@ -124,7 +124,9 @@ pub fn hash_capability_token(token: &str) -> [u8; 32] {
 pub fn hashes_equal(left: &[u8; 32], right: &[u8; 32]) -> bool {
     left.iter()
         .zip(right.iter())
-        .fold(0_u8, |difference, (left, right)| difference | (*left ^ *right))
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (*left ^ *right)
+        })
         == 0
 }
 
@@ -177,7 +179,12 @@ mod tests {
 
     #[test]
     fn ambiguous_room_characters_are_rejected() {
-        for value in ["OOOOOOOOOOOO", "IIIIIIIIIIII", "LLLLLLLLLLLL", "UUUUUUUUUUUU"] {
+        for value in [
+            "OOOOOOOOOOOO",
+            "IIIIIIIIIIII",
+            "LLLLLLLLLLLL",
+            "UUUUUUUUUUUU",
+        ] {
             assert!(!is_valid_room_id(value));
         }
     }

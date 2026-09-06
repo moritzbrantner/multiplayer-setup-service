@@ -258,11 +258,7 @@ impl RoomStore {
         None
     }
 
-    pub async fn peer_sender(
-        &self,
-        room_id: &str,
-        role: PeerRole,
-    ) -> Option<ConnectionSender> {
+    pub async fn peer_sender(&self, room_id: &str, role: PeerRole) -> Option<ConnectionSender> {
         let mut inner = self.inner.lock().await;
         purge_expired(&mut inner);
         let room = inner.rooms.get(room_id)?;
