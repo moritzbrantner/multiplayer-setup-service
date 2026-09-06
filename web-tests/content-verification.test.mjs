@@ -75,6 +75,7 @@ test("trusted manifest fetch is HTTPS-only except for local development", async 
   assert.equal(requested.url, "http://localhost:8080/game.manifest.json");
   assert.equal(requested.options.cache, "no-store");
   assert.equal(requested.options.credentials, "omit");
+  assert.equal(requested.options.redirect, "error");
 });
 
 test("games can restrict manifests to explicitly configured trusted origins", async () => {
