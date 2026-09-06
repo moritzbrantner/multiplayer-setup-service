@@ -71,10 +71,10 @@ fn pages_explainer_documents_the_actual_multiplayer_boundary() {
     assert!(index.contains("data-topology=\"host\""));
     assert!(index.contains("max=\"16\""));
     assert!(index.contains("Input-only synchronization"));
-    assert!(index.contains("TURN may relay"));
     assert!(index.contains("./explainer.css"));
     assert!(index.contains("./explainer.js"));
 
+    assert!(explainer.contains("TURN may relay"));
     assert!(explainer.contains("import { topologyEdgeCount } from \"./arena-model.mjs\""));
     assert!(explainer.contains("topologyEdgeCount(topology, count)"));
     assert!(explainer.contains("localStorage.setItem(\"multiplayer-setup-endpoint\""));
