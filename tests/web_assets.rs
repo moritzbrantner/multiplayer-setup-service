@@ -98,6 +98,8 @@ fn pages_workflow_is_read_only_until_deploy_and_publishes_only_web_assets() {
     assert!(workflow.contains("pages: write"));
     assert!(workflow.contains("id-token: write"));
     assert!(workflow.contains("actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b"));
-    assert!(workflow.contains("actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9"));
+    assert!(
+        workflow.contains("actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9")
+    );
     assert!(workflow.contains("actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e"));
 }
