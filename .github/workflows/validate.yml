@@ -29,13 +29,18 @@ jobs:
           cargo fmt --all
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           path = Path("src/main.rs")
           source = path.read_text()
-          old = ".any(|protocol| protocol == WEBSOCKET_PROTOCOL)"
-          new = ".any(|protocol| *protocol == WEBSOCKET_PROTOCOL)"
-          if old in source:
-              source = source.replace(old, new)
-              path.write_text(source)
+          source, count = re.subn(
+              r"protocols\s*\.iter\(\)\s*\.any\(\|protocol\| protocol == WEBSOCKET_PROTOCOL\)",
+              "protocols.contains(&WEBSOCKET_PROTOCOL)",
+              source,
+          )
+          if count != 1:
+              raise SystemExit(f"expected one WebSocket protocol comparison, found {count}")
+          path.write_text(source)
           PY
           cargo fmt --all
       - name: Lint
