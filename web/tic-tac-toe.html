@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Peer-to-peer Tic-Tac-Toe</title>
+  <link rel="stylesheet" href="./common.css">
+  <style>
+    .board { display: grid; grid-template-columns: repeat(3, minmax(72px, 120px)); gap: 8px; justify-content: center; margin: 20px 0; }
+    .cell { aspect-ratio: 1; font-size: clamp(2rem, 10vw, 4rem); font-weight: 700; padding: 0; }
+    .game-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <nav><a href="./index.html">Demos</a><a href="./pong.html">Pong</a></nav>
+    <h1>Peer-to-peer Tic-Tac-Toe</h1>
+    <section class="panel lobby" aria-label="Lobby controls">
+      <button id="host" type="button">Host game</button>
+      <span>or</span>
+      <label>Room code <input id="room" autocomplete="off" placeholder="ABCD-EFGH-JKMN"></label>
+      <button id="join" type="button">Join game</button>
+    </section>
+    <p id="status" class="status" aria-live="polite">Not connected.</p>
+    <p id="codeRow" class="hidden">Room: <span id="code" class="room-code"></span></p>
+
+    <section class="panel game-shell">
+      <p id="gameStatus">Connect two peers to start.</p>
+      <div id="board" class="board" aria-label="Tic-Tac-Toe board"></div>
+      <div class="game-actions"><button id="reset" type="button" disabled>New game</button></div>
+    </section>
+    <script type="module" src="./tic-tac-toe.js"></script>
+  </main>
+</body>
+</html>

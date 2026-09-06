@@ -1,0 +1,28 @@
+:root {
+  color-scheme: light dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: Canvas;
+  color: CanvasText;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+main { max-width: 900px; margin: 0 auto; padding: 24px; }
+a { color: LinkText; }
+nav { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+.panel { border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 12px; padding: 16px; }
+.lobby { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: end; }
+label { display: grid; gap: 6px; font-weight: 600; }
+input, button { font: inherit; min-height: 44px; border-radius: 8px; border: 1px solid color-mix(in srgb, CanvasText 24%, transparent); padding: 9px 12px; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+.status { min-height: 1.5em; margin: 12px 0 0; }
+.room-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .06em; font-weight: 700; }
+.game-shell { margin-top: 20px; }
+.muted { opacity: .72; }
+.hidden { display: none !important; }
+@media (max-width: 620px) {
+  main { padding: 16px; }
+  .lobby { grid-template-columns: 1fr; }
+  .lobby > span { display: none; }
+}
