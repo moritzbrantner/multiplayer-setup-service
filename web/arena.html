@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Input-only multiplayer arena</title>
+  <link rel="stylesheet" href="./common.css">
+  <style>
+    .arena-config { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    select { font: inherit; min-height: 44px; border-radius: 8px; border: 1px solid color-mix(in srgb, CanvasText 24%, transparent); padding: 9px 12px; }
+    .arena-stage { position: relative; aspect-ratio: 16 / 10; width: 100%; overflow: hidden; border: 1px solid color-mix(in srgb, CanvasText 24%, transparent); border-radius: 12px; background: color-mix(in srgb, CanvasText 5%, Canvas); }
+    .arena-player { position: absolute; width: 22px; height: 22px; border-radius: 50%; transform: translate(-50%, -50%); border: 2px solid Canvas; box-shadow: 0 0 0 1px color-mix(in srgb, CanvasText 35%, transparent); }
+    .arena-player[data-self="true"] { width: 28px; height: 28px; }
+    .arena-player span { position: absolute; left: 50%; top: 25px; transform: translateX(-50%); white-space: nowrap; font: 11px ui-monospace, monospace; color: CanvasText; background: Canvas; padding: 1px 3px; border-radius: 3px; }
+    .arena-meta { display: flex; flex-wrap: wrap; gap: 12px 20px; margin: 12px 0; }
+    .controls { display: grid; grid-template-columns: repeat(3, 48px); grid-template-rows: repeat(2, 48px); gap: 6px; width: max-content; margin-top: 12px; }
+    .controls button { min-height: 48px; padding: 0; }
+    #up { grid-column: 2; }
+    #left { grid-column: 1; grid-row: 2; }
+    #down { grid-column: 2; grid-row: 2; }
+    #right { grid-column: 3; grid-row: 2; }
+    @media (max-width: 620px) { .arena-config { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <nav><a href="./">Demos</a></nav>
+    <h1>16-player input arena</h1>
+    <p>Each browser computes the same state locally. The network carries only small movement commands and WebRTC setup traffic.</p>
+
+    <section class="panel">
+      <div class="arena-config">
+        <label>
+          Topology
+          <select id="topology">
+            <option value="mesh">Full mesh</option>
+            <option value="host">Host-spoke</option>
+          </select>
+        </label>
+        <label>
+          Lobby size
+          <select id="max-participants">
+            <option value="2">2</option>
+            <option value="4">4</option>
+            <option value="8">8</option>
+            <option value="16" selected>16</option>
+          </select>
+        </label>
+      </div>
+      <div class="lobby">
+        <button id="host" type="button">Host lobby</button>
+        <span>or</span>
+        <label>
+          Lobby code
+          <input id="code" autocomplete="off" placeholder="ABCD-EFGH-JKMN">
+        </label>
+        <button id="join" type="button">Join lobby</button>
+      </div>
+      <p id="status" class="status" aria-live="polite">Not connected.</p>
+      <p id="invite" class="muted"></p>
+    </section>
+
+    <section id="game" class="game-shell hidden">
+      <div class="arena-meta">
+        <span>Participant: <strong id="self-id" class="room-code"></strong></span>
+        <span>Connected participants: <strong id="participant-count">1</strong></span>
+        <span>Ready peer links: <strong id="peer-count">0</strong></span>
+        <span>Topology edges at current size: <strong id="edge-count">0</strong></span>
+      </div>
+      <div id="arena" class="arena-stage" aria-label="Multiplayer input arena"></div>
+      <div class="controls" aria-label="Movement controls">
+        <button id="up" type="button" aria-label="Move up">↑</button>
+        <button id="left" type="button" aria-label="Move left">←</button>
+        <button id="down" type="button" aria-label="Move down">↓</button>
+        <button id="right" type="button" aria-label="Move right">→</button>
+      </div>
+      <p class="muted">Hold WASD or arrow keys for repeated 20 Hz input commands. In mesh mode every participant sends directly to every peer. In host-spoke mode guests send to the host, which relays the same tiny input command to the other guests; every browser performs the movement calculation itself.</p>
+    </section>
+
+    <script type="module" src="./arena.js"></script>
+  </main>
+</body>
+</html>
