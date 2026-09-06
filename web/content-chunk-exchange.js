@@ -125,6 +125,7 @@ export class ContentChunkExchange extends EventTarget {
     transport,
     manifest,
     store,
+    cache = null,
     maxPendingRequests = DEFAULT_MAX_PENDING_REQUESTS,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   } = {}) {
@@ -134,6 +135,9 @@ export class ContentChunkExchange extends EventTarget {
     }
     if (!store || typeof store.putChunk !== "function" || typeof store.getChunk !== "function") {
       throw new Error("ContentChunkExchange requires a verified chunk store");
+    }
+    if (cache !== null && typeof cache.putChunk !== "function") {
+      throw new Error("ContentChunkExchange cache requires putChunk()");
     }
     validateTrustedManifest(manifest);
     if (!Number.isInteger(maxPendingRequests) || maxPendingRequests < 1 || maxPendingRequests > 128) {
@@ -146,6 +150,7 @@ export class ContentChunkExchange extends EventTarget {
     this.transport = transport;
     this.manifest = manifest;
     this.store = store;
+    this.cache = cache;
     this.maxPendingRequests = maxPendingRequests;
     this.requestTimeoutMs = requestTimeoutMs;
     this.pendingRequests = new Map();
@@ -293,6 +298,19 @@ export class ContentChunkExchange extends EventTarget {
       this.#rejectRequest(key, error);
       return;
     }
+
+    if (this.cache) {
+      try {
+        await this.cache.putChunk(pending.path, frame.index, frame.payload);
+      } catch (error) {
+        this.dispatchEvent(
+          new CustomEvent("cache-error", {
+            detail: { peerId, path: pending.path, index: frame.index, error },
+          }),
+        );
+      }
+    }
+
     pending.received.add(frame.index);
     this.dispatchEvent(
       new CustomEvent("chunk", {
