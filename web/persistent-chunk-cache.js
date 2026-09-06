@@ -61,21 +61,27 @@ function validateBackend(backend) {
 function requestResult(request) {
   return new Promise((resolve, reject) => {
     request.addEventListener("success", () => resolve(request.result), { once: true });
-    request.addEventListener("error", () => reject(request.error ?? new Error("IndexedDB request failed")), {
-      once: true,
-    });
+    request.addEventListener(
+      "error",
+      () => reject(request.error ?? new Error("IndexedDB request failed")),
+      { once: true },
+    );
   });
 }
 
 function transactionDone(transaction) {
   return new Promise((resolve, reject) => {
     transaction.addEventListener("complete", resolve, { once: true });
-    transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), {
-      once: true,
-    });
-    transaction.addEventListener("error", () => reject(transaction.error ?? new Error("IndexedDB transaction failed")), {
-      once: true,
-    });
+    transaction.addEventListener(
+      "abort",
+      () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")),
+      { once: true },
+    );
+    transaction.addEventListener(
+      "error",
+      () => reject(transaction.error ?? new Error("IndexedDB transaction failed")),
+      { once: true },
+    );
   });
 }
 
@@ -95,52 +101,66 @@ export class IndexedDbChunkCacheBackend {
   async get(key) {
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readonly");
+    const done = transactionDone(transaction);
     const result = await requestResult(transaction.objectStore(STORE_NAME).get(key));
-    await transactionDone(transaction);
+    await done;
     return result ?? null;
   }
 
   async put(record) {
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readwrite");
+    const done = transactionDone(transaction);
     transaction.objectStore(STORE_NAME).put(record);
-    await transactionDone(transaction);
+    await done;
   }
 
   async delete(key) {
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readwrite");
+    const done = transactionDone(transaction);
     transaction.objectStore(STORE_NAME).delete(key);
-    await transactionDone(transaction);
+    await done;
   }
 
   async listFile(namespace) {
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readonly");
+    const done = transactionDone(transaction);
     const result = await requestResult(
       transaction.objectStore(STORE_NAME).index("fileNamespace").getAll(namespace),
     );
-    await transactionDone(transaction);
+    await done;
     return result ?? [];
   }
 
   async listScope(scope) {
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readonly");
+    const done = transactionDone(transaction);
     const result = await requestResult(
       transaction.objectStore(STORE_NAME).index("scope").getAll(scope),
     );
-    await transactionDone(transaction);
+    await done;
     return result ?? [];
   }
 
   async clearScope(scope) {
     const database = await this.#database();
-    const transaction = database.transaction(STORE_NAME, "readwrite");
-    const store = transaction.objectStore(STORE_NAME);
-    const keys = await requestResult(store.index("scope").getAllKeys(scope));
+
+    const readTransaction = database.transaction(STORE_NAME, "readonly");
+    const readDone = transactionDone(readTransaction);
+    const keys = await requestResult(
+      readTransaction.objectStore(STORE_NAME).index("scope").getAllKeys(scope),
+    );
+    await readDone;
+    if (keys.length === 0) return;
+
+    const writeTransaction = database.transaction(STORE_NAME, "readwrite");
+    const writeDone = transactionDone(writeTransaction);
+    const store = writeTransaction.objectStore(STORE_NAME);
     for (const key of keys) store.delete(key);
-    await transactionDone(transaction);
+    await writeDone;
   }
 
   async #database() {
@@ -156,7 +176,9 @@ export class IndexedDbChunkCacheBackend {
         const store = database.objectStoreNames.contains(STORE_NAME)
           ? request.transaction.objectStore(STORE_NAME)
           : database.createObjectStore(STORE_NAME, { keyPath: "key" });
-        if (!store.indexNames.contains("scope")) store.createIndex("scope", "scope", { unique: false });
+        if (!store.indexNames.contains("scope")) {
+          store.createIndex("scope", "scope", { unique: false });
+        }
         if (!store.indexNames.contains("fileNamespace")) {
           store.createIndex("fileNamespace", "fileNamespace", { unique: false });
         }
@@ -165,12 +187,16 @@ export class IndexedDbChunkCacheBackend {
         }
       });
       request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener("error", () => reject(request.error ?? new Error("Could not open IndexedDB cache")), {
-        once: true,
-      });
-      request.addEventListener("blocked", () => reject(new Error("IndexedDB cache upgrade is blocked")), {
-        once: true,
-      });
+      request.addEventListener(
+        "error",
+        () => reject(request.error ?? new Error("Could not open IndexedDB cache")),
+        { once: true },
+      );
+      request.addEventListener(
+        "blocked",
+        () => reject(new Error("IndexedDB cache upgrade is blocked")),
+        { once: true },
+      );
     });
   }
 }
@@ -207,6 +233,7 @@ export class PersistentVerifiedChunkCache {
 
     const namespace = fileNamespace(this.manifest, file);
     const key = chunkKey(namespace, index);
+    const usageBefore = await this.#usage();
     const previous = await this.backend.get(key);
     const record = {
       key,
@@ -224,8 +251,7 @@ export class PersistentVerifiedChunkCache {
     };
     await this.backend.put(record);
 
-    const usage = await this.#usage();
-    this.usageBytes = usage - (previous?.size ?? 0) + record.size;
+    this.usageBytes = usageBefore - (previous?.size ?? 0) + record.size;
     await this.prune();
     return {
       path,
@@ -304,7 +330,9 @@ export class PersistentVerifiedChunkCache {
       } catch {
         await this.backend.delete(record.key);
         discarded.push(record.index);
-        if (this.usageBytes !== null) this.usageBytes = Math.max(0, this.usageBytes - (record.size ?? 0));
+        if (this.usageBytes !== null) {
+          this.usageBytes = Math.max(0, this.usageBytes - (record.size ?? 0));
+        }
       }
     }
 
