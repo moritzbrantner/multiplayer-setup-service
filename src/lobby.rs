@@ -335,8 +335,8 @@ impl LobbyStore {
 
         lobby
             .participants
-            .iter()
-            .filter_map(|(_, participant)| {
+            .values()
+            .filter_map(|participant| {
                 participant
                     .connection
                     .as_ref()
@@ -419,14 +419,24 @@ mod tests {
 
         let mut ids = vec![created.participant_id];
         for _ in 1..16 {
-            ids.push(store.join_lobby(&created.lobby_id).await.unwrap().participant_id);
+            ids.push(
+                store
+                    .join_lobby(&created.lobby_id)
+                    .await
+                    .unwrap()
+                    .participant_id,
+            );
         }
 
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), 16);
         assert_eq!(
-            store.status(&created.lobby_id).await.unwrap().participant_count,
+            store
+                .status(&created.lobby_id)
+                .await
+                .unwrap()
+                .participant_count,
             16
         );
         assert!(matches!(
