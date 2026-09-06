@@ -1,9 +1,13 @@
 use std::fs;
 use std::path::PathBuf;
 
-fn web_file(name: &str) -> String {
+fn repo_file(path: &str) -> String {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    fs::read_to_string(root.join("web").join(name)).expect("web demo asset should be readable")
+    fs::read_to_string(root.join(path)).expect("repository asset should be readable")
+}
+
+fn web_file(name: &str) -> String {
+    repo_file(&format!("web/{name}"))
 }
 
 #[test]
@@ -57,10 +61,43 @@ fn input_arena_transmits_commands_and_delegates_deterministic_calculation() {
 }
 
 #[test]
+fn pages_explainer_documents_the_actual_multiplayer_boundary() {
+    let index = web_file("index.html");
+    let explainer = web_file("explainer.js");
+
+    assert!(index.contains("Connect briefly. Play directly."));
+    assert!(index.contains("The server gets peers connected. It does not run the game."));
+    assert!(index.contains("data-topology=\"mesh\""));
+    assert!(index.contains("data-topology=\"host\""));
+    assert!(index.contains("max=\"16\""));
+    assert!(index.contains("Input-only synchronization"));
+    assert!(index.contains("TURN may relay"));
+    assert!(index.contains("./explainer.css"));
+    assert!(index.contains("./explainer.js"));
+
+    assert!(explainer.contains("import { topologyEdgeCount } from \"./arena-model.mjs\""));
+    assert!(explainer.contains("topologyEdgeCount(topology, count)"));
+    assert!(explainer.contains("localStorage.setItem(\"multiplayer-setup-endpoint\""));
+    assert!(explainer.contains("url.searchParams.set(\"api\", endpoint)"));
+}
+
+#[test]
 fn demo_pages_are_static_and_locally_linked() {
     let index = web_file("index.html");
     assert!(index.contains("./tic-tac-toe.html"));
     assert!(index.contains("./pong.html"));
     assert!(index.contains("./arena.html"));
     assert!(!index.contains("/demo/"));
+}
+
+#[test]
+fn pages_workflow_is_read_only_until_deploy_and_publishes_only_web_assets() {
+    let workflow = repo_file(".github/workflows/pages.yml");
+    assert!(workflow.contains("permissions:\n  contents: read"));
+    assert!(workflow.contains("path: web"));
+    assert!(workflow.contains("pages: write"));
+    assert!(workflow.contains("id-token: write"));
+    assert!(workflow.contains("actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b"));
+    assert!(workflow.contains("actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9"));
+    assert!(workflow.contains("actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e"));
 }
