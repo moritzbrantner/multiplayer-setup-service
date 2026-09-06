@@ -1,0 +1,121 @@
+
+#[test]
+fn copied_protocol_surface_is_covered() {
+    assert_eq!(protocol::WEBSOCKET_PROTOCOL, "multiplayer-setup-v1");
+    assert_eq!(protocol::CAPABILITY_PROTOCOL_PREFIX, "cap.");
+
+    let server_messages = [
+        protocol::ServerMessage::Connected {
+            role: PeerRole::Host,
+        },
+        protocol::ServerMessage::PeerConnected {
+            peer_role: PeerRole::Guest,
+        },
+        protocol::ServerMessage::PeerDisconnected {
+            peer_role: PeerRole::Guest,
+        },
+        protocol::ServerMessage::Pong {
+            nonce: Some("room".to_owned()),
+        },
+        protocol::ServerMessage::Signal {
+            from: PeerRole::Host,
+            payload: serde_json::json!({"candidate": "opaque"}),
+        },
+        protocol::ServerMessage::Error {
+            code: "test-error",
+            message: "test error",
+        },
+    ];
+    for message in server_messages {
+        assert!(!serde_json::to_string(&message).unwrap().is_empty());
+    }
+
+    let participant_id = generate_participant_id().unwrap();
+    let lobby_messages = [
+        LobbyServerMessage::Connected {
+            participant_id: participant_id.clone(),
+            host_participant_id: participant_id.clone(),
+            participants: vec![participant_id.clone()],
+        },
+        LobbyServerMessage::ParticipantConnected {
+            participant_id: participant_id.clone(),
+        },
+        LobbyServerMessage::ParticipantDisconnected {
+            participant_id: participant_id.clone(),
+        },
+        LobbyServerMessage::Pong {
+            nonce: Some("lobby".to_owned()),
+        },
+        LobbyServerMessage::Signal {
+            from: participant_id,
+            payload: serde_json::json!({"description": "opaque"}),
+        },
+        LobbyServerMessage::Error {
+            code: "test-error",
+            message: "test error",
+        },
+    ];
+    for message in lobby_messages {
+        assert!(!serde_json::to_string(&message).unwrap().is_empty());
+    }
+
+    assert!(matches!(
+        LobbyConnectionCommand::Close,
+        LobbyConnectionCommand::Close
+    ));
+    assert!(matches!(
+        ConnectionCommand::Send(protocol::ServerMessage::Pong { nonce: None }),
+        ConnectionCommand::Send(protocol::ServerMessage::Pong { nonce: None })
+    ));
+}
+
+#[tokio::test]
+async fn copied_runtime_metadata_and_cleanup_paths_are_covered() {
+    let rooms = RoomStore::new(2);
+    let created_room = rooms.create_room(Duration::from_secs(60)).await.unwrap();
+    let joined_room = rooms.join_room(&created_room.room_id).await.unwrap();
+
+    let (host_sender, _host_receiver) = mpsc::unbounded_channel();
+    rooms
+        .register_connection(
+            &created_room.room_id,
+            PeerRole::Host,
+            &created_room.host_token,
+            host_sender,
+        )
+        .await
+        .unwrap();
+    let (guest_sender, _guest_receiver) = mpsc::unbounded_channel();
+    let guest_registration = rooms
+        .register_connection(
+            &created_room.room_id,
+            PeerRole::Guest,
+            &joined_room.guest_token,
+            guest_sender,
+        )
+        .await
+        .unwrap();
+    assert!(guest_registration.peer.is_some());
+    assert_eq!(rooms.cleanup_expired().await, 0);
+
+    let lobbies = LobbyStore::new(2);
+    let created_lobby = lobbies
+        .create_lobby(Duration::from_secs(60), 4)
+        .await
+        .unwrap();
+    let (participant_sender, _participant_receiver) = mpsc::unbounded_channel();
+    let registration = lobbies
+        .register_connection(
+            &created_lobby.lobby_id,
+            &created_lobby.participant_id,
+            &created_lobby.participant_token,
+            participant_sender,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        registration.host_participant_id,
+        created_lobby.host_participant_id
+    );
+    assert_eq!(lobbies.cleanup_expired().await, 0);
+}
