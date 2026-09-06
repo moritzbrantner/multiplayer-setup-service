@@ -8,7 +8,7 @@ Peers are untrusted byte transports. They are never authoritative for game logic
 
 A game that opts in configures a trusted manifest URL owned by its original HTTPS origin or repository/release infrastructure. The browser fetches that manifest directly from the configured trusted location and verifies peer-provided content against it before exposing bytes to the game.
 
-The setup/rendezvous server never receives file bytes and never becomes the game authority. Seeder discovery also keeps the Rust server payload-opaque: availability hints travel inside the existing targeted signaling envelope rather than adding game-content state to the service.
+The setup/rendezvous server never receives file bytes and never becomes the game authority. Seeder discovery and content-peer negotiation keep the Rust server payload-opaque: both travel inside the existing targeted signaling envelope rather than adding game-content state to the service.
 
 ## Manifest v1
 
@@ -88,19 +88,19 @@ const session = new LobbySession({
 });
 ```
 
-Only opted-in sessions create or accept the third reliable ordered `content` DataChannel. The existing `reliable` gameplay-command channel and unordered freshness-first `realtime` channel remain unchanged.
+Only opted-in sessions create or accept the original third reliable ordered `content` DataChannel on gameplay peer relationships. The existing `reliable` gameplay-command channel and unordered freshness-first `realtime` channel remain unchanged.
 
-Bulk sends use `RTCDataChannel.bufferedAmount` backpressure with separate high/low water marks. Filling the content channel therefore waits for content capacity instead of deliberately delaying gameplay sends in application code.
+Bulk sends use `RTCDataChannel.bufferedAmount` backpressure with separate high/low water marks. Filling a content channel therefore waits for content capacity instead of deliberately delaying gameplay sends in application code.
 
 The current P2P chunk payload limit is 60 KiB. Games should generate trusted chunk manifests at or below that size; 48 KiB is a conservative default. Large files are represented as many independently hashed chunks rather than single giant DataChannel messages.
 
 ## Single-peer transfer
 
-`ContentTransfer` is constructed only around an opted-in `LobbySession` and a previously trusted manifest. Its current flow is intentionally small:
+`ContentTransfer` is constructed around a content-capable transport and a previously trusted manifest. Its flow is intentionally strict:
 
 1. the sender verifies the complete local file against the trusted manifest before seeding it;
 2. the sender announces only path/size/hash/chunk metadata already present in the trusted manifest;
-3. the sender transmits bounded binary chunk frames over the content channel;
+3. the sender transmits bounded binary chunk frames;
 4. the receiver checks the announced metadata against its own trusted manifest;
 5. every incoming chunk is verified against its authoritative chunk hash before being retained;
 6. after all chunks arrive, the assembled file is verified again against the authoritative whole-file hash;
@@ -108,7 +108,7 @@ The current P2P chunk payload limit is 60 KiB. Games should generate trusted chu
 
 Peer-provided metadata cannot relax or replace the trusted manifest. A mismatch aborts the transfer.
 
-This slice deliberately uses an in-memory assembly limit (64 MiB by default). Persistent/streaming chunk storage is deferred to the cache/swarm work so the first transfer protocol stays small and testable.
+This layer deliberately uses an in-memory assembly limit (64 MiB by default). Persistent/streaming chunk storage is deferred to the cache/swarm work so the transfer protocol stays small and testable.
 
 ## Seeder discovery
 
@@ -127,45 +127,48 @@ A game may instead provide `paths` to seed only selected transferable manifest f
 
 Advertisements contain only whole-file SHA-256 content IDs. They are bounded to 128 IDs per participant, sorted, unique, and lowercase. No filenames, arbitrary URLs, or executable metadata are accepted as seeder identifiers.
 
-The advertisement uses the existing opaque lobby signaling envelope:
+Availability hints use the existing opaque lobby signaling envelope. Existing volunteer seeders automatically advertise to a participant that joins later, and discovery works between participants that are not gameplay neighbors in host-spoke mode.
 
-```json
-{
-  "type": "signal",
-  "to": "89ABCDEF",
-  "payload": {
-    "contentSeed": {
-      "v": 1,
-      "contentIds": ["<trusted whole-file SHA-256>"]
-    }
-  }
-}
+The browser still treats advertisements as hints only. `ContentSeederDiscovery` filters every advertised content ID against its own trusted manifest. Unknown peer hashes are ignored. A valid advertisement does not prove possession; actual bytes must still pass per-chunk and whole-file verification before use.
+
+## Bounded content-only peer topology
+
+Discovery must not force the gameplay network to become a full mesh. `ContentPeerPool` therefore owns a separate set of WebRTC connections used only for bulk content.
+
+```js
+const contentPeers = new ContentPeerPool({
+  session,
+  maxPeers: 4,
+});
+
+await contentPeers.connect(selectedSeederId);
 ```
 
-This has three useful properties:
+The default cap is four total content peers per browser and the implementation refuses values above eight. Connecting and incoming relationships both consume the same cap, so a browser cannot accidentally build an unbounded content mesh.
 
-- the Rust service remains a connection-setup/rendezvous service and does not become a persistent content tracker;
-- discovery works even between two participants that are not gameplay neighbors in host-spoke mode, because targeted signaling is topology-independent;
-- when a participant joins later, existing volunteer seeders automatically send their current advertisement to that participant, so the newcomer can discover seeders that opted in earlier.
+Content-peer SDP and ICE data are namespaced inside the existing targeted signaling payload. The Rust server relays the opaque bytes exactly as it does for ordinary WebRTC setup and stores no content topology. A random connection identifier scopes offers, answers, candidates, close messages, collision handling, and capacity rejection so stale signaling cannot silently attach to a replacement relationship.
 
-The browser still treats these messages as availability hints only. `ContentSeederDiscovery` filters every advertised content ID against its own trusted manifest. Unknown peer hashes are ignored. A valid advertisement does not prove possession; actual bytes must still pass per-chunk and whole-file verification before use.
+Each content-only relationship has one reliable ordered `content-swarm-v1` DataChannel. The pool exposes the same `sendContent(...)` method and `content` event shape expected by `ContentTransfer`, including buffered-amount backpressure. The verified transfer layer therefore does not need to know whether bytes travel over a gameplay-adjacent content channel or a sparse content-only peer relationship.
 
-When a participant disconnects, its discovery entry is removed locally. The setup server does not persist seeder state, and reconnecting clients re-advertise from browser state.
+This matters especially for host-spoke gameplay. Two guests can form a temporary direct content relationship while both continue to have only the host as a gameplay neighbor. Closing that content relationship does not change deterministic gameplay topology.
 
-This slice deliberately stops at discovery. It does not automatically open extra content-only peer relationships or download from multiple seeders yet.
+Participant departure tears down its content-only connection. A full receiving pool rejects new offers fail-closed rather than evicting an existing relationship implicitly.
+
+This slice still does not select seeders automatically or split one download across multiple sources. It establishes the bounded transport substrate that the scheduler can use next.
 
 ## Optionality invariant
 
-No existing game needs to opt in. With the default `contentSharing: false`, no content DataChannel is created, incoming unsolicited content channels are closed, no content-transfer/discovery helper is constructed, and no bulk-transfer bandwidth is used.
+No existing game needs to opt in. With the default `contentSharing: false`, no content DataChannel is created, no content-transfer/discovery/peer-pool helper is constructed, and no bulk-transfer bandwidth is used.
 
 For a game that does opt in, the player still begins with seeding disabled. Uploading starts only after the game explicitly maps a player choice to `setSeederEnabled(true)`.
 
 ## Planned slices
 
-1. **Trusted manifest and verification** — implemented and merged; fail-closed SHA-256 verification and deterministic logic fingerprints.
-2. **Single-peer chunk transport** — implemented and merged; explicit content DataChannel, bounded chunks, backpressure, per-chunk verification, and final verification.
-3. **Seeder advertisement and discovery** — implemented in the current slice; player opt-in, trusted content IDs, late-join advertisement, and topology-independent discovery over existing signaling.
-4. **Bounded swarm** — a small number of upload/download peers, multi-source scheduling, resumable verified chunks, and reseeding.
-5. **Persistent cache and relay policy** — browser cache, eviction, TURN-aware bulk-transfer limits, and diagnostics.
+1. **Trusted manifest and verification** — merged; fail-closed SHA-256 verification and deterministic logic fingerprints.
+2. **Single-peer chunk transport** — merged; bounded chunks, backpressure, per-chunk verification, and final verification.
+3. **Seeder advertisement and discovery** — merged; player opt-in, trusted content IDs, late-join advertisement, and topology-independent discovery.
+4. **Bounded content peer pool** — current slice; sparse content-only WebRTC relationships independent from gameplay topology.
+5. **Resumable multi-source scheduler** — request verified chunk ranges from a few discovered seeders, retry/reassign failures, and reseed only verified chunks.
+6. **Persistent cache and relay policy** — browser cache, eviction, TURN-aware bulk-transfer limits, and diagnostics.
 
 Each slice remains independently testable and preserves gameplay priority over bulk transfer.
