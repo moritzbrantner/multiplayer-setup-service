@@ -1,4 +1,13 @@
 import { LobbySession } from "./lobby-session.js";
+import {
+  applySnapshotEntry,
+  applyStepToState,
+  hashId,
+  initialPlayer,
+  isTopologyReady,
+  topologyEdgeCount,
+  validStep,
+} from "./arena-model.mjs";
 
 const params = new URLSearchParams(window.location.search);
 const apiBase = params.get("api") || "http://127.0.0.1:8787";
@@ -26,20 +35,6 @@ let localSequence = 0;
 const players = new Map();
 const lastSequence = new Map();
 const heldKeys = new Set();
-
-function hashId(id) {
-  let hash = 2166136261;
-  for (const char of id) {
-    hash ^= char.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function initialPlayer(id) {
-  const hash = hashId(id);
-  return { x: 80 + (hash % 841), y: 80 + ((hash >>> 10) % 841) };
-}
 
 function ensurePlayer(id) {
   if (!players.has(id)) {
@@ -79,48 +74,29 @@ function render() {
   const count = participantIds.length || 1;
   participantCount.textContent = String(count);
   peerCount.textContent = String(session?.readyPeerIds().length ?? 0);
-  const edges = topologySelect.value === "mesh" ? (count * (count - 1)) / 2 : Math.max(0, count - 1);
-  edgeCount.textContent = String(edges);
-}
-
-function validStep(message) {
-  return (
-    message?.type === "step" &&
-    typeof message.participantId === "string" &&
-    Number.isInteger(message.seq) &&
-    message.seq > 0 &&
-    Number.isInteger(message.dx) &&
-    Number.isInteger(message.dy) &&
-    Math.abs(message.dx) <= 1 &&
-    Math.abs(message.dy) <= 1 &&
-    Math.abs(message.dx) + Math.abs(message.dy) > 0
-  );
+  edgeCount.textContent = String(topologyEdgeCount(topologySelect.value, count));
 }
 
 function applyStep(message) {
-  if (!validStep(message) || !session?.participants.has(message.participantId)) return false;
-
-  const previous = lastSequence.get(message.participantId) ?? 0;
-  if (message.seq <= previous) return false;
-
-  const player = ensurePlayer(message.participantId);
-  player.x = Math.max(20, Math.min(980, player.x + message.dx * 12));
-  player.y = Math.max(20, Math.min(980, player.y + message.dy * 12));
-  lastSequence.set(message.participantId, message.seq);
-  render();
-  return true;
+  if (!session) return false;
+  const applied = applyStepToState({
+    players,
+    lastSequence,
+    participants: session.participants,
+  }, message);
+  if (applied) render();
+  return applied;
 }
 
 function topologyReady() {
   if (!session) return false;
-  const ready = new Set(session.readyPeerIds());
-  if (session.topology === "mesh") {
-    return ready.size === Math.max(0, session.participants.size - 1);
-  }
-  if (session.participantId === session.hostParticipantId) {
-    return ready.size === Math.max(0, session.participants.size - 1);
-  }
-  return ready.has(session.hostParticipantId);
+  return isTopologyReady({
+    topology: session.topology,
+    participantId: session.participantId,
+    hostParticipantId: session.hostParticipantId,
+    participantCount: session.participants.size,
+    readyPeerIds: session.readyPeerIds(),
+  });
 }
 
 function sendLocalStep(dx, dy) {
@@ -150,21 +126,19 @@ function sendLocalStep(dx, dy) {
 function receiveReliable(peerId, message) {
   if (message?.type === "snapshot") {
     if (peerId !== session.hostParticipantId || !Array.isArray(message.players)) return;
+    let changed = false;
     for (const snapshot of message.players) {
-      if (
-        typeof snapshot?.id === "string" &&
-        Number.isInteger(snapshot.x) &&
-        Number.isInteger(snapshot.y) &&
-        Number.isInteger(snapshot.seq)
-      ) {
-        players.set(snapshot.id, {
-          x: Math.max(20, Math.min(980, snapshot.x)),
-          y: Math.max(20, Math.min(980, snapshot.y)),
-        });
-        lastSequence.set(snapshot.id, Math.max(0, snapshot.seq));
-      }
+      changed =
+        applySnapshotEntry(
+          {
+            players,
+            lastSequence,
+            participants: session.participants,
+          },
+          snapshot,
+        ) || changed;
     }
-    render();
+    if (changed) render();
     return;
   }
 

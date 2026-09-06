@@ -39,13 +39,21 @@ fn games_share_the_peer_session_transport() {
 }
 
 #[test]
-fn input_arena_transmits_commands_and_simulates_locally() {
+fn input_arena_transmits_commands_and_delegates_deterministic_calculation() {
     let arena = web_file("arena.js");
+    let model = web_file("arena-model.mjs");
+
     assert!(arena.contains("./lobby-session.js"));
+    assert!(arena.contains("./arena-model.mjs"));
     assert!(arena.contains("type: \"step\""));
     assert!(arena.contains("broadcastReliable"));
-    assert!(arena.contains("player.x + message.dx * 12"));
-    assert!(arena.contains("player.y + message.dy * 12"));
+    assert!(arena.contains("applyStepToState"));
+
+    assert!(model.contains("const STEP_DISTANCE = 12"));
+    assert!(model.contains("current.x + message.dx * STEP_DISTANCE"));
+    assert!(model.contains("current.y + message.dy * STEP_DISTANCE"));
+    assert!(model.contains("Math.abs(message.dx) + Math.abs(message.dy) === 1"));
+    assert!(model.contains("snapshot.seq < previous"));
 }
 
 #[test]
