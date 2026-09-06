@@ -3,7 +3,7 @@ name: Validate
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, test/extensive-multiplayer-coverage-validation]
 
 permissions:
   contents: write
@@ -178,12 +178,11 @@ async fn copied_runtime_metadata_and_cleanup_paths_are_covered() {
       - name: Build release binary
         run: cargo build --release --locked
       - name: Persist canonical extensive Rust tests
-        if: github.event_name == 'pull_request'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add tests
           if ! git diff --cached --quiet; then
             git commit -m "Canonicalize and complete extensive Rust tests"
-            git push origin HEAD:${GITHUB_HEAD_REF}
+            git push origin HEAD:${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}
           fi
