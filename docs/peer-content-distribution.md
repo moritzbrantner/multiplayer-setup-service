@@ -8,7 +8,7 @@ Peers are untrusted byte transports. They are never authoritative for game logic
 
 A game that opts in configures a trusted manifest URL owned by its original HTTPS origin or repository/release infrastructure. The browser fetches that manifest directly from the configured trusted location and verifies peer-provided content against it before exposing bytes to the game.
 
-The setup/rendezvous server never receives file bytes and never becomes the game authority. Seeder discovery and content-peer negotiation keep the Rust server payload-opaque: both travel inside the existing targeted signaling envelope rather than adding game-content state to the service.
+The setup/rendezvous server never receives file bytes and never becomes the game authority. Seeder discovery and content-peer negotiation stay inside the existing targeted opaque signaling envelope, so the Rust service does not become a persistent content tracker.
 
 ## Manifest v1
 
@@ -43,111 +43,141 @@ The setup/rendezvous server never receives file bytes and never becomes the game
 }
 ```
 
-`role: "asset"` marks ordinary content such as textures, models, audio, maps, or data. `role: "logic"` marks execution-critical JavaScript, WASM, scripts, deterministic rule data, or other files that influence game behavior.
+`asset` files are ordinary textures, models, audio, maps, or data. `logic` files are execution-critical JavaScript, WASM, scripts, deterministic rule data, or other files that influence game behavior.
 
-Every path is relative and traversal-free. Every entry has an exact byte length and whole-file SHA-256 digest. `chunks` is optional for content that will never travel over the P2P bulk-transfer path; files transferred or exchanged peer-to-peer must define trusted per-chunk hashes.
-
-The chunk list length must exactly match the file size and configured chunk size. This lets a receiver reject a corrupt or substituted chunk immediately and reseed only chunks that have already been independently verified.
+Every path is relative and traversal-free. Every entry has an exact byte length and whole-file SHA-256 digest. Files exchanged peer-to-peer also define authoritative per-chunk hashes. The chunk count must exactly match the file size and chunk size.
 
 Files absent from the trusted manifest are not authorized, even if a peer offers them.
 
-## Authoritative source options
+## Authoritative source
 
 The manifest URL is game configuration, not lobby state and not peer input. Suitable authorities include:
 
-- the game's own HTTPS origin, for example a GitHub Pages deployment;
+- the game's own HTTPS origin, including GitHub Pages;
 - a release-specific path on the game's server;
-- an immutable repository/release URL pinned to a commit or release when stronger reproducibility is desired.
+- an immutable repository/release URL pinned to a commit or release.
 
-The browser helper requires HTTPS except for loopback development URLs. A game can also configure an explicit allow-list of trusted manifest origins. Redirects are rejected so a configured trusted URL cannot silently move to another location.
+The browser helper requires HTTPS except for loopback development, supports an explicit trusted-origin allow-list, disables cache reuse for the manifest fetch, omits credentials, and rejects redirects.
 
-The multiplayer setup service does not copy, rewrite, cache, sign, or approve the manifest. This keeps the service provider-neutral and prevents rendezvous infrastructure from becoming the authority for game code.
+The multiplayer setup service does not copy, rewrite, cache, sign, or approve the manifest.
 
 ## Game logic verification
 
-Execution-critical files are verified more strictly as a set:
+Execution-critical files are verified as a complete trusted set:
 
-1. fetch the manifest from the configured trusted source;
+1. fetch the manifest directly from the configured authority;
 2. identify every `logic` entry;
 3. require every trusted logic file to be present;
 4. verify exact byte size and SHA-256 for each file;
-5. derive a deterministic logic fingerprint from the trusted game id, version, paths, sizes, and hashes;
+5. derive a deterministic logic fingerprint from game id, version, paths, sizes, and hashes;
 6. expose only the verified trusted logic entries to the game.
 
-Extra files supplied by a peer are not part of the verified logic set. A matching peer-to-peer fingerprint can be used later as a cheap compatibility check, but a fingerprint advertised by another peer is never itself a source of trust.
+Extra files supplied by a peer are never part of the verified logic set. A peer fingerprint is useful only as a compatibility hint; it is not a source of trust.
 
 ## Explicit content transport
 
-`LobbySession` keeps content distribution disabled by default. A game must opt in with `contentSharing: true` before constructing any content helpers.
+`LobbySession` keeps content distribution disabled by default. A game must opt in with `contentSharing: true` before constructing content helpers.
 
-The original content channel follows gameplay peer relationships. `ContentPeerPool` adds a separate sparse content-only topology for bulk transfer, capped at four peers by default and eight maximum. This lets two host-spoke guests exchange large files directly without turning gameplay into a full mesh.
+The original optional content channel follows gameplay peer relationships. `ContentPeerPool` adds a separate sparse content-only topology for bulk transfer, capped at four peers by default and eight maximum. This lets two host-spoke guests exchange large files directly without turning gameplay into a full mesh.
 
-Both surfaces use reliable ordered DataChannels and buffered-amount backpressure. The current P2P chunk payload limit is 60 KiB; 48 KiB is a conservative manifest chunk size.
+Content DataChannels are reliable and ordered. Bulk sends use `bufferedAmount` high/low-water backpressure. The current chunk payload limit is 60 KiB; 48 KiB is a conservative manifest chunk size.
 
 ## Whole-file single-peer transfer
 
-`ContentTransfer` verifies the sender's complete local file before seeding, verifies every received chunk against the authoritative manifest, verifies the assembled file again, and only then emits the file to the game.
+`ContentTransfer` remains the simple path for small games or assets where one peer owns the complete file:
 
-Peer-provided metadata cannot relax or replace the trusted manifest. This path remains useful for small or simple games where one peer has the complete asset and resumability is not necessary.
+1. sender verifies the full local file before seeding;
+2. receiver validates announced metadata against its own trusted manifest;
+3. every received chunk is verified immediately;
+4. the assembled file is re-verified against its whole-file SHA-256;
+5. only then is it emitted to the game.
+
+Peer metadata can never relax or replace the trusted manifest.
 
 ## Seeder discovery
 
-Seeder participation is a second opt-in on top of game-level content sharing. A game can support P2P content while a particular player chooses not to upload anything.
+Seeder participation is a second opt-in on top of game-level content sharing. A game can support P2P content while an individual player chooses not to upload.
 
-`ContentSeederDiscovery` advertises bounded whole-file SHA-256 IDs from the trusted manifest over the existing opaque lobby signaling channel. Existing volunteer seeders automatically advertise to a participant that joins later, including between participants that are not gameplay neighbors.
+`ContentSeederDiscovery` advertises bounded whole-file SHA-256 IDs from the trusted manifest over existing targeted signaling. Existing volunteer seeders automatically advertise to participants who join later, including between guests that are not gameplay neighbors.
 
-Advertisements are only availability hints. The local browser filters them against its own trusted manifest, and actual bytes must still pass cryptographic verification.
+Advertisements are availability hints only. Unknown content IDs are ignored locally, and actual bytes must still pass cryptographic verification.
 
 ## Bounded content-only peer topology
 
-`ContentPeerPool` owns temporary WebRTC relationships used only for bulk content. Incoming and outgoing relationships consume the same hard peer cap. A full pool rejects new offers instead of silently evicting existing peers.
+`ContentPeerPool` owns temporary WebRTC relationships used only for bulk content. Incoming and outgoing relationships consume the same hard cap. A full pool rejects new offers instead of silently evicting existing peers.
 
 Content-peer SDP and ICE remain inside a namespaced opaque signaling payload. Random connection IDs scope offers, answers, candidates, close messages, collision handling, and capacity rejection. The Rust setup server stores none of this content topology.
 
-The pool exposes `sendContent(...)` and `content` events compatible with the higher-level transfer/exchange layers.
+The pool exposes `sendContent(...)` and `content` events compatible with the higher-level transfer and exchange layers.
 
 ## Verified resumable chunk store
 
 `VerifiedChunkStore` is the authority boundary between received bytes and reusable local chunks.
 
-A chunk can enter the store only after its exact size and SHA-256 match the trusted manifest. The store copies accepted bytes on insertion and on read, so callers cannot mutate a previously verified chunk in place. Re-inserting the same valid chunk is idempotent.
+A chunk enters the store only after exact size and SHA-256 verification against the trusted manifest. Accepted bytes are copied on insertion and on read, so callers cannot mutate verified state in place. Re-inserting the same valid chunk is idempotent.
 
-The store supports:
+The store supports available/missing indexes, atomic staging from a fully verified local file, independently verified chunk insertion, and final assembly. `assembleFile` requires every trusted chunk and re-verifies the whole-file SHA-256 before returning bytes.
 
-- querying available and missing chunk indexes;
-- loading a complete trusted file and staging all of its verified chunks atomically;
-- accepting independently verified chunks as they arrive;
-- assembling a file only when every trusted chunk is present;
-- re-verifying the final whole-file SHA-256 before returning the assembled bytes.
-
-This makes partial reseeding safe: a client does not need to possess the whole asset before it can serve chunks it has already verified.
+A partially downloaded client can therefore safely reseed only the chunks it has already verified.
 
 ## Bounded chunk request/response
 
-`ContentChunkExchange` runs over a content-capable transport such as `ContentPeerPool`. A requester asks one peer for at most 64 explicit chunk indexes at a time. Requests and pending operations are bounded, and requests time out or fail when their content peer closes.
+`ContentChunkExchange` runs over a content-capable transport such as `ContentPeerPool`. A requester asks one peer for at most 64 explicit chunk indexes at a time. Pending requests and timeouts are bounded.
 
-The response protocol binds binary chunk frames to the request ID and requested path. The receiver rejects unrequested or duplicate chunks and inserts each response through `VerifiedChunkStore`, so corrupt bytes never become reseedable state.
+Binary responses are scoped to request ID and chunk index. The receiver rejects duplicate, unrequested, or corrupt chunks and inserts successful responses only through `VerifiedChunkStore`.
 
-The responder reads only from its own `VerifiedChunkStore`. It therefore cannot accidentally serve unverified bytes through the normal API. If it has only some requested chunks, it sends those and completes the request; the requester computes the remaining indexes locally and can ask another seeder later.
+The responder reads only from its own verified store. A partial seeder returns the requested chunks it has and completes the request; the requester computes the missing indexes locally. A peer's claim of availability is never trusted over observed verified responses.
 
-A peer's claim that it has content is still not trusted. Availability is learned by successful verified responses, while missing or corrupt responses remain recoverable scheduler inputs.
+## Bounded multi-source swarm scheduler
 
-This slice supplies resumability and safe partial reseeding but deliberately does not yet choose seeders or divide work across several peers automatically.
+`ContentSwarmDownloader` composes discovery, the bounded peer pool, chunk exchange, and verified store into the first automatic swarm layer.
+
+```js
+const swarm = new ContentSwarmDownloader({
+  manifest,
+  discovery,
+  peerPool,
+  exchange,
+  store,
+  maxSources: 3,
+});
+
+const result = await swarm.download("assets/world.glb");
+```
+
+The default is three concurrent sources and the scheduler refuses more than four. This remains below the content peer pool's hard transport bound.
+
+For each download the scheduler:
+
+1. starts from `VerifiedChunkStore.missingChunks(path)`, so previously verified chunks are automatically resumed;
+2. selects a deterministic sorted subset of discovered seeders and makes only those content peers ready;
+3. partitions missing indexes across ready sources in bounded batches;
+4. requests the batches concurrently;
+5. records which peer explicitly failed to provide which chunk and avoids assigning that chunk to the same peer again;
+6. excludes a source from the current download after a request error;
+7. recomputes progress only from the verified local store;
+8. reassigns remaining indexes to other sources while any verified progress remains possible;
+9. fails closed if no source can provide the remaining trusted chunks;
+10. completes only through `VerifiedChunkStore.assembleFile`, which re-verifies the authoritative whole-file SHA-256.
+
+Two concurrent calls for the same path share one in-flight operation rather than duplicating peer requests. The scheduler emits progress from verified chunk counts plus source-error and complete events for diagnostics.
+
+This is intentionally not a general BitTorrent client. It is lobby-scoped, bounded, manifest-constrained, and useful only for content that the game explicitly opted into sharing.
 
 ## Optionality invariant
 
-No existing game needs to opt in. With the default `contentSharing: false`, no content DataChannel, peer pool, discovery helper, verified store, or chunk exchange is created and no bulk-transfer bandwidth is used.
+No existing game needs to opt in. With the default `contentSharing: false`, no content DataChannel, discovery helper, peer pool, verified store, chunk exchange, or swarm downloader is constructed and no bulk-transfer bandwidth is used.
 
-For a game that does opt in, the player still begins with seeding disabled. Uploading starts only after the game explicitly maps a player choice to `setSeederEnabled(true)`.
+For a game that opts in, the player still begins with seeding disabled. Uploading starts only after the game maps an explicit player choice to `setSeederEnabled(true)`.
 
-## Planned slices
+## Implementation slices
 
 1. **Trusted manifest and verification** — merged.
 2. **Single-peer verified chunk transport** — merged.
 3. **Seeder advertisement and discovery** — merged.
 4. **Bounded content-only peer pool** — merged.
-5. **Verified resumable chunk exchange** — current slice; verified chunk store, bounded requests, partial responses, safe reseeding.
-6. **Multi-source swarm scheduler** — choose a few discovered seeders, partition missing chunks, retry/reassign failures, and converge deterministically on the complete verified file.
-7. **Persistent cache and relay policy** — browser persistence, eviction, TURN-aware bulk-transfer limits, and diagnostics.
+5. **Verified resumable chunk exchange** — merged.
+6. **Bounded multi-source swarm scheduler** — current slice.
+7. **Persistent cache and relay policy** — next: durable browser chunk storage, eviction, TURN-aware bulk limits, and diagnostics.
 
 Each slice remains independently testable and preserves gameplay priority over bulk transfer.
