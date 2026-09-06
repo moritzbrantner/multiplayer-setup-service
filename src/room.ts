@@ -45,16 +45,10 @@ export class SignalingRoom {
       return this.connect(request);
     }
 
-    return jsonResponse(
-      { error: { code: "not-found", message: "Room endpoint not found" } },
-      404,
-    );
+    return jsonResponse({ error: { code: "not-found", message: "Room endpoint not found" } }, 404);
   }
 
-  async webSocketMessage(
-    socket: WebSocket,
-    message: ArrayBuffer | string,
-  ): Promise<void> {
+  async webSocketMessage(socket: WebSocket, message: ArrayBuffer | string): Promise<void> {
     const attachment = socket.deserializeAttachment() as PeerAttachment | null;
     if (!attachment) {
       socket.close(1011, "Missing peer attachment");
@@ -131,10 +125,7 @@ export class SignalingRoom {
   private async initialize(request: Request): Promise<Response> {
     const existing = await this.state.storage.get<RoomRecord>(ROOM_STORAGE_KEY);
     if (existing && existing.expiresAt > Date.now()) {
-      return jsonResponse(
-        { error: { code: "room-exists", message: "Room already exists" } },
-        409,
-      );
+      return jsonResponse({ error: { code: "room-exists", message: "Room already exists" } }, 409);
     }
 
     const input = await parseJson<{
@@ -175,10 +166,7 @@ export class SignalingRoom {
     await this.state.storage.put(ROOM_STORAGE_KEY, room);
     await this.state.storage.setAlarm(room.expiresAt);
 
-    return jsonResponse(
-      { status: "waiting", expiresAt: room.expiresAt },
-      201,
-    );
+    return jsonResponse({ status: "waiting", expiresAt: room.expiresAt }, 201);
   }
 
   private async join(request: Request): Promise<Response> {
@@ -198,11 +186,7 @@ export class SignalingRoom {
     }
 
     const input = await parseJson<{ guestTokenHash?: unknown }>(request);
-    if (
-      !input ||
-      typeof input.guestTokenHash !== "string" ||
-      input.guestTokenHash.length !== 64
-    ) {
+    if (!input || typeof input.guestTokenHash !== "string" || input.guestTokenHash.length !== 64) {
       return jsonResponse(
         {
           error: {
@@ -221,10 +205,7 @@ export class SignalingRoom {
     };
     await this.state.storage.put(ROOM_STORAGE_KEY, paired);
 
-    return jsonResponse(
-      { status: "paired", expiresAt: paired.expiresAt },
-      200,
-    );
+    return jsonResponse({ status: "paired", expiresAt: paired.expiresAt }, 200);
   }
 
   private async status(): Promise<Response> {
@@ -286,8 +267,7 @@ export class SignalingRoom {
       );
     }
 
-    const expectedHash =
-      role === "host" ? room.hostTokenHash : room.guestTokenHash;
+    const expectedHash = role === "host" ? room.hostTokenHash : room.guestTokenHash;
     if (!expectedHash || (await hashCapabilityToken(token)) !== expectedHash) {
       return jsonResponse(
         {
