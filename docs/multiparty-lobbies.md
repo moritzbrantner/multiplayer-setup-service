@@ -77,6 +77,8 @@ The signaling WebSocket stays open during the lobby lifetime because later parti
 
 ## Input-only deterministic model
 
+The intended gameplay invariant is that ordinary network messages stay compact: inputs, commands, tick identifiers, sequence numbers, and occasional verification hashes. The game simulation itself runs on every participant's computer. Full world-state transmission should be an exceptional recovery/bootstrap mechanism rather than the normal data path.
+
 `web/arena.html` is a deliberately simple test of the model:
 
 1. each participant starts from deterministic integer coordinates derived from its participant ID;
