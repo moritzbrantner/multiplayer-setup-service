@@ -80,7 +80,11 @@ Client messages are intentionally small and generic:
 The peer receives the signal with its sender role:
 
 ```json
-{ "type": "signal", "from": "host", "payload": { "description": { "type": "offer", "sdp": "..." } } }
+{
+  "type": "signal",
+  "from": "host",
+  "payload": { "description": { "type": "offer", "sdp": "..." } }
+}
 ```
 
 The service also emits `connected`, `peer-connected`, `peer-disconnected`, `pong`, and `error`. Signaling frames are limited to 32 KiB. The service never interprets or persists the signaling payload.
@@ -90,15 +94,14 @@ The service also emits `connected`, `peer-connected`, `peer-disconnected`, `pong
 The WebRTC client remains in the game repository. Its ICE configuration is injected separately so TURN can be added without coupling relay credentials to this service.
 
 ```ts
-const created = await fetch(`${setupApi}/rooms`, { method: "POST" }).then((response) => response.json());
+const created = await fetch(`${setupApi}/rooms`, { method: "POST" }).then((response) =>
+  response.json(),
+);
 const socketUrl = new URL(created.websocketPath, setupApi);
 socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
 socketUrl.searchParams.set("role", "host");
 
-const signaling = new WebSocket(socketUrl, [
-  "multiplayer-setup-v1",
-  `cap.${created.hostToken}`,
-]);
+const signaling = new WebSocket(socketUrl, ["multiplayer-setup-v1", `cap.${created.hostToken}`]);
 const peer = new RTCPeerConnection({ iceServers });
 
 // Exchange peer.localDescription and ICE candidates through `signal` envelopes.
