@@ -1,6 +1,8 @@
 const SIGNALING_PROTOCOL = "multiplayer-setup-v1";
 const DEFAULT_CONTENT_HIGH_WATER_MARK = 1_048_576;
 const DEFAULT_CONTENT_LOW_WATER_MARK = 262_144;
+const MAX_SEED_CONTENT_IDS = 128;
+const CONTENT_ID_PATTERN = /^[0-9a-f]{64}$/;
 
 function toWebSocketUrl(apiBase, websocketPath, participantId) {
   const url = new URL(websocketPath, apiBase);
@@ -54,6 +56,32 @@ function validateContentWaterMarks(highWaterMark, lowWaterMark) {
   }
 }
 
+function normalizeSeedContentIds(contentIds) {
+  if (!Array.isArray(contentIds)) throw new Error("Seed content IDs must be an array");
+  if (contentIds.length > MAX_SEED_CONTENT_IDS) {
+    throw new Error(`A participant may advertise at most ${MAX_SEED_CONTENT_IDS} content IDs`);
+  }
+  const normalized = [...contentIds];
+  if (normalized.some((contentId) => typeof contentId !== "string" || !CONTENT_ID_PATTERN.test(contentId))) {
+    throw new Error("Seed content IDs must be lowercase SHA-256 hex digests");
+  }
+  normalized.sort();
+  if (normalized.some((contentId, index) => index > 0 && contentId === normalized[index - 1])) {
+    throw new Error("Seed content IDs must be unique");
+  }
+  return normalized;
+}
+
+function parseSeedAdvertisement(payload) {
+  const advertisement = payload?.contentSeed;
+  if (!advertisement || advertisement.v !== 1) return null;
+  try {
+    return normalizeSeedContentIds(advertisement.contentIds);
+  } catch {
+    return null;
+  }
+}
+
 export class LobbySession extends EventTarget {
   constructor({
     apiBase = window.location.origin,
@@ -82,6 +110,7 @@ export class LobbySession extends EventTarget {
     this.signaling = null;
     this.participants = new Set();
     this.links = new Map();
+    this.seedContentIds = [];
     this.closed = false;
   }
 
@@ -136,6 +165,20 @@ export class LobbySession extends EventTarget {
       .filter(([, link]) => contentReady(link))
       .map(([peerId]) => peerId)
       .sort();
+  }
+
+  advertisedSeedContentIds() {
+    return [...this.seedContentIds];
+  }
+
+  announceSeedContent(contentIds) {
+    if (!this.contentSharing) throw new Error("Content sharing is not enabled for this lobby session");
+    const normalized = normalizeSeedContentIds(contentIds);
+    this.seedContentIds = normalized;
+    for (const peerId of [...this.participants].sort()) {
+      if (peerId !== this.participantId) this.#sendSeedAdvertisement(peerId);
+    }
+    this.#emit("seed-advertisement-local", { contentIds: [...normalized] });
   }
 
   sendReliable(peerId, data) {
@@ -194,6 +237,7 @@ export class LobbySession extends EventTarget {
     }
     this.links.clear();
     this.participants.clear();
+    this.seedContentIds = [];
     this.#emit("statechange", { state: "closed" });
   }
 
@@ -270,6 +314,9 @@ export class LobbySession extends EventTarget {
           hostParticipantId: this.hostParticipantId,
         });
         this.#ensureLink(message.participantId);
+        if (this.contentSharing && this.seedContentIds.length > 0) {
+          this.#sendSeedAdvertisement(message.participantId);
+        }
         break;
       case "participant-disconnected":
         this.participants.delete(message.participantId);
@@ -376,6 +423,14 @@ export class LobbySession extends EventTarget {
   }
 
   async #handleSignal(from, payload) {
+    const seedContentIds = this.contentSharing ? parseSeedAdvertisement(payload) : null;
+    if (seedContentIds) {
+      if (this.participants.has(from) && from !== this.participantId) {
+        this.#emit("content-seed", { peerId: from, contentIds: seedContentIds });
+      }
+      return;
+    }
+
     if (!this.#shouldConnect(from)) return;
     const link = this.#ensureLink(from);
     if (!link) return;
@@ -402,6 +457,15 @@ export class LobbySession extends EventTarget {
   async #flushCandidates(link) {
     const pending = link.pendingCandidates.splice(0);
     for (const candidate of pending) await link.peer.addIceCandidate(candidate);
+  }
+
+  #sendSeedAdvertisement(peerId) {
+    this.#signal(peerId, {
+      contentSeed: {
+        v: 1,
+        contentIds: [...this.seedContentIds],
+      },
+    });
   }
 
   #signal(to, payload) {
