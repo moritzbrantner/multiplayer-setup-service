@@ -189,8 +189,7 @@ fn legacy_two_player_http_contract_remains_compatible() {
     assert_eq!(status, 409);
     assert_eq!(json(&body)["error"]["code"], "room-full");
 
-    let (status, body) =
-        request(service.port, "GET", &format!("/rooms/{room_id}"), None).unwrap();
+    let (status, body) = request(service.port, "GET", &format!("/rooms/{room_id}"), None).unwrap();
     assert_eq!(status, 200);
     assert_eq!(json(&body)["status"], "paired");
 }

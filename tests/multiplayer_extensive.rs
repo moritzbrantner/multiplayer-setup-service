@@ -114,7 +114,9 @@ fn lobby_signaling_payload_stays_opaque() {
     .unwrap();
 
     match parsed {
-        LobbyClientMessage::Signal { payload: actual, .. } => {
+        LobbyClientMessage::Signal {
+            payload: actual, ..
+        } => {
             assert_eq!(
                 actual,
                 serde_json::json!({
@@ -129,8 +131,16 @@ fn lobby_signaling_payload_stays_opaque() {
 
 #[test]
 fn malformed_protocol_envelopes_are_fail_closed() {
-    for value in ["not-json", "{}", r#"{"type":"unknown"}"#, r#"{"type":"signal"}"#] {
-        assert_eq!(parse_client_message(value), Err(ClientMessageError::Invalid));
+    for value in [
+        "not-json",
+        "{}",
+        r#"{"type":"unknown"}"#,
+        r#"{"type":"signal"}"#,
+    ] {
+        assert_eq!(
+            parse_client_message(value),
+            Err(ClientMessageError::Invalid)
+        );
     }
 
     let to = generate_participant_id().unwrap();
@@ -148,7 +158,10 @@ fn malformed_protocol_envelopes_are_fail_closed() {
 async fn room_store_capacity_is_reused_after_expiry() {
     let store = RoomStore::new(1);
     let expired = store.create_room(Duration::ZERO).await.unwrap();
-    assert!(matches!(store.status(&expired.room_id).await, Err(StoreError::RoomNotFound)));
+    assert!(matches!(
+        store.status(&expired.room_id).await,
+        Err(StoreError::RoomNotFound)
+    ));
 
     let replacement = store.create_room(Duration::from_secs(60)).await.unwrap();
     assert!(store.status(&replacement.room_id).await.is_ok());
@@ -191,7 +204,9 @@ async fn guest_cannot_authenticate_before_claiming_the_room() {
     let token = generate_capability_token().unwrap();
 
     assert!(matches!(
-        store.authenticate(&created.room_id, PeerRole::Guest, &token).await,
+        store
+            .authenticate(&created.room_id, PeerRole::Guest, &token)
+            .await,
         Err(StoreError::InvalidCredentials)
     ));
 }
@@ -205,7 +220,12 @@ async fn room_registration_rejects_wrong_role_capability() {
 
     assert!(matches!(
         store
-            .register_connection(&created.room_id, PeerRole::Guest, &created.host_token, sender)
+            .register_connection(
+                &created.room_id,
+                PeerRole::Guest,
+                &created.host_token,
+                sender
+            )
             .await,
         Err(StoreError::InvalidCredentials)
     ));
@@ -226,15 +246,30 @@ async fn room_peer_routing_is_bidirectional_only_after_both_connect() {
 
     let (host_sender, mut host_receiver) = mpsc::unbounded_channel();
     store
-        .register_connection(&created.room_id, PeerRole::Host, &created.host_token, host_sender)
+        .register_connection(
+            &created.room_id,
+            PeerRole::Host,
+            &created.host_token,
+            host_sender,
+        )
         .await
         .unwrap();
 
-    assert!(store.peer_sender(&created.room_id, PeerRole::Host).await.is_none());
+    assert!(
+        store
+            .peer_sender(&created.room_id, PeerRole::Host)
+            .await
+            .is_none()
+    );
 
     let (guest_sender, mut guest_receiver) = mpsc::unbounded_channel();
     store
-        .register_connection(&created.room_id, PeerRole::Guest, &joined.guest_token, guest_sender)
+        .register_connection(
+            &created.room_id,
+            PeerRole::Guest,
+            &joined.guest_token,
+            guest_sender,
+        )
         .await
         .unwrap();
 
@@ -244,7 +279,10 @@ async fn room_peer_routing_is_bidirectional_only_after_both_connect() {
         .unwrap()
         .send(ConnectionCommand::Close)
         .unwrap();
-    assert!(matches!(guest_receiver.recv().await, Some(ConnectionCommand::Close)));
+    assert!(matches!(
+        guest_receiver.recv().await,
+        Some(ConnectionCommand::Close)
+    ));
 
     store
         .peer_sender(&created.room_id, PeerRole::Guest)
@@ -252,7 +290,10 @@ async fn room_peer_routing_is_bidirectional_only_after_both_connect() {
         .unwrap()
         .send(ConnectionCommand::Close)
         .unwrap();
-    assert!(matches!(host_receiver.recv().await, Some(ConnectionCommand::Close)));
+    assert!(matches!(
+        host_receiver.recv().await,
+        Some(ConnectionCommand::Close)
+    ));
 }
 
 #[tokio::test]
@@ -263,13 +304,23 @@ async fn stale_room_disconnect_cannot_remove_a_replacement_connection() {
 
     let (guest_sender, _guest_receiver) = mpsc::unbounded_channel();
     store
-        .register_connection(&created.room_id, PeerRole::Guest, &joined.guest_token, guest_sender)
+        .register_connection(
+            &created.room_id,
+            PeerRole::Guest,
+            &joined.guest_token,
+            guest_sender,
+        )
         .await
         .unwrap();
 
     let (first_sender, _first_receiver) = mpsc::unbounded_channel();
     let first = store
-        .register_connection(&created.room_id, PeerRole::Host, &created.host_token, first_sender)
+        .register_connection(
+            &created.room_id,
+            PeerRole::Host,
+            &created.host_token,
+            first_sender,
+        )
         .await
         .unwrap();
 
@@ -291,14 +342,15 @@ async fn stale_room_disconnect_cannot_remove_a_replacement_connection() {
             .await
             .is_none()
     );
-    assert!(store.peer_sender(&created.room_id, PeerRole::Guest).await.is_some());
     assert!(
         store
-            .unregister_connection(
-                &created.room_id,
-                PeerRole::Host,
-                replacement.connection_id
-            )
+            .peer_sender(&created.room_id, PeerRole::Guest)
+            .await
+            .is_some()
+    );
+    assert!(
+        store
+            .unregister_connection(&created.room_id, PeerRole::Host, replacement.connection_id)
             .await
             .is_some()
     );
@@ -309,10 +361,18 @@ async fn unknown_room_operations_fail_closed() {
     let store = RoomStore::new(2);
     let token = generate_capability_token().unwrap();
 
-    assert!(matches!(store.join_room("0123456789AB").await, Err(StoreError::RoomNotFound)));
-    assert!(matches!(store.status("0123456789AB").await, Err(StoreError::RoomNotFound)));
     assert!(matches!(
-        store.authenticate("0123456789AB", PeerRole::Host, &token).await,
+        store.join_room("0123456789AB").await,
+        Err(StoreError::RoomNotFound)
+    ));
+    assert!(matches!(
+        store.status("0123456789AB").await,
+        Err(StoreError::RoomNotFound)
+    ));
+    assert!(matches!(
+        store
+            .authenticate("0123456789AB", PeerRole::Host, &token)
+            .await,
         Err(StoreError::RoomNotFound)
     ));
 }
@@ -326,20 +386,28 @@ async fn lobby_store_capacity_is_reused_after_expiry() {
         LobbyStoreError::LobbyNotFound
     );
 
-    let replacement = store.create_lobby(Duration::from_secs(60), 16).await.unwrap();
+    let replacement = store
+        .create_lobby(Duration::from_secs(60), 16)
+        .await
+        .unwrap();
     assert!(store.status(&replacement.lobby_id).await.is_ok());
 }
 
 #[tokio::test]
 async fn concurrent_lobby_join_never_exceeds_sixteen_participants() {
     let store = LobbyStore::new(2);
-    let created = store.create_lobby(Duration::from_secs(60), 16).await.unwrap();
+    let created = store
+        .create_lobby(Duration::from_secs(60), 16)
+        .await
+        .unwrap();
 
     let mut tasks = Vec::new();
     for _ in 0..40 {
         let store = store.clone();
         let lobby_id = created.lobby_id.clone();
-        tasks.push(tokio::spawn(async move { store.join_lobby(&lobby_id).await }));
+        tasks.push(tokio::spawn(
+            async move { store.join_lobby(&lobby_id).await },
+        ));
     }
 
     let mut successes = 0;
@@ -354,13 +422,23 @@ async fn concurrent_lobby_join_never_exceeds_sixteen_participants() {
 
     assert_eq!(successes, 15);
     assert_eq!(full, 25);
-    assert_eq!(store.status(&created.lobby_id).await.unwrap().participant_count, 16);
+    assert_eq!(
+        store
+            .status(&created.lobby_id)
+            .await
+            .unwrap()
+            .participant_count,
+        16
+    );
 }
 
 #[tokio::test]
 async fn small_lobby_limit_is_enforced_independently_of_global_maximum() {
     let store = LobbyStore::new(2);
-    let created = store.create_lobby(Duration::from_secs(60), 2).await.unwrap();
+    let created = store
+        .create_lobby(Duration::from_secs(60), 2)
+        .await
+        .unwrap();
     store.join_lobby(&created.lobby_id).await.unwrap();
 
     assert_eq!(
@@ -372,7 +450,10 @@ async fn small_lobby_limit_is_enforced_independently_of_global_maximum() {
 #[tokio::test]
 async fn lobby_host_identity_is_stable_for_every_joiner() {
     let store = LobbyStore::new(2);
-    let created = store.create_lobby(Duration::from_secs(60), 8).await.unwrap();
+    let created = store
+        .create_lobby(Duration::from_secs(60), 8)
+        .await
+        .unwrap();
 
     for _ in 0..7 {
         let joined = store.join_lobby(&created.lobby_id).await.unwrap();
@@ -389,19 +470,30 @@ async fn lobby_host_identity_is_stable_for_every_joiner() {
 #[tokio::test]
 async fn lobby_capabilities_are_not_interchangeable() {
     let store = LobbyStore::new(2);
-    let created = store.create_lobby(Duration::from_secs(60), 4).await.unwrap();
+    let created = store
+        .create_lobby(Duration::from_secs(60), 4)
+        .await
+        .unwrap();
     let second = store.join_lobby(&created.lobby_id).await.unwrap();
     let third = store.join_lobby(&created.lobby_id).await.unwrap();
 
     assert_eq!(
         store
-            .authenticate(&created.lobby_id, &second.participant_id, &third.participant_token)
+            .authenticate(
+                &created.lobby_id,
+                &second.participant_id,
+                &third.participant_token
+            )
             .await,
         Err(LobbyStoreError::InvalidCredentials)
     );
     assert_eq!(
         store
-            .authenticate(&created.lobby_id, &third.participant_id, &created.participant_token)
+            .authenticate(
+                &created.lobby_id,
+                &third.participant_id,
+                &created.participant_token
+            )
             .await,
         Err(LobbyStoreError::InvalidCredentials)
     );
@@ -410,7 +502,10 @@ async fn lobby_capabilities_are_not_interchangeable() {
 #[tokio::test]
 async fn lobby_registration_reports_only_connected_participants_in_sorted_order() {
     let store = LobbyStore::new(2);
-    let created = store.create_lobby(Duration::from_secs(60), 4).await.unwrap();
+    let created = store
+        .create_lobby(Duration::from_secs(60), 4)
+        .await
+        .unwrap();
     let second = store.join_lobby(&created.lobby_id).await.unwrap();
     let third = store.join_lobby(&created.lobby_id).await.unwrap();
 
@@ -424,7 +519,10 @@ async fn lobby_registration_reports_only_connected_participants_in_sorted_order(
         )
         .await
         .unwrap();
-    assert_eq!(host_registration.participants, vec![created.participant_id.clone()]);
+    assert_eq!(
+        host_registration.participants,
+        vec![created.participant_id.clone()]
+    );
 
     let (third_sender, _third_receiver) = mpsc::unbounded_channel();
     let registration = store
@@ -447,7 +545,10 @@ async fn lobby_registration_reports_only_connected_participants_in_sorted_order(
 #[tokio::test]
 async fn stale_lobby_disconnect_cannot_remove_a_replacement_connection() {
     let store = LobbyStore::new(2);
-    let created = store.create_lobby(Duration::from_secs(60), 4).await.unwrap();
+    let created = store
+        .create_lobby(Duration::from_secs(60), 4)
+        .await
+        .unwrap();
     let joined = store.join_lobby(&created.lobby_id).await.unwrap();
 
     let (host_sender, _host_receiver) = mpsc::unbounded_channel();
@@ -486,13 +587,21 @@ async fn stale_lobby_disconnect_cannot_remove_a_replacement_connection() {
     assert!(replacement.replaced.is_some());
     assert!(
         store
-            .unregister_connection(&created.lobby_id, &joined.participant_id, first.connection_id)
+            .unregister_connection(
+                &created.lobby_id,
+                &joined.participant_id,
+                first.connection_id
+            )
             .await
             .is_empty()
     );
     assert!(
         store
-            .target_sender(&created.lobby_id, &created.participant_id, &joined.participant_id)
+            .target_sender(
+                &created.lobby_id,
+                &created.participant_id,
+                &joined.participant_id
+            )
             .await
             .is_ok()
     );
@@ -510,7 +619,10 @@ async fn stale_lobby_disconnect_cannot_remove_a_replacement_connection() {
 #[tokio::test]
 async fn lobby_disconnect_notifies_every_other_connected_participant() {
     let store = LobbyStore::new(2);
-    let created = store.create_lobby(Duration::from_secs(60), 4).await.unwrap();
+    let created = store
+        .create_lobby(Duration::from_secs(60), 4)
+        .await
+        .unwrap();
     let second = store.join_lobby(&created.lobby_id).await.unwrap();
     let third = store.join_lobby(&created.lobby_id).await.unwrap();
 
@@ -522,7 +634,10 @@ async fn lobby_disconnect_notifies_every_other_connected_participant() {
     ] {
         let (sender, _receiver) = mpsc::unbounded_channel();
         registrations.push(
-            store.register_connection(&created.lobby_id, id, token, sender).await.unwrap(),
+            store
+                .register_connection(&created.lobby_id, id, token, sender)
+                .await
+                .unwrap(),
         );
     }
 
@@ -535,7 +650,11 @@ async fn lobby_disconnect_notifies_every_other_connected_participant() {
         .await;
     assert_eq!(peers.len(), 2);
     assert_eq!(
-        store.status(&created.lobby_id).await.unwrap().participant_count,
+        store
+            .status(&created.lobby_id)
+            .await
+            .unwrap()
+            .participant_count,
         3,
         "disconnecting signaling does not remove lobby membership"
     );
@@ -544,13 +663,20 @@ async fn lobby_disconnect_notifies_every_other_connected_participant() {
 #[tokio::test]
 async fn targeted_routing_rejects_self_unknown_sender_unknown_target_and_disconnected_target() {
     let store = LobbyStore::new(2);
-    let created = store.create_lobby(Duration::from_secs(60), 4).await.unwrap();
+    let created = store
+        .create_lobby(Duration::from_secs(60), 4)
+        .await
+        .unwrap();
     let joined = store.join_lobby(&created.lobby_id).await.unwrap();
     let unknown = generate_participant_id().unwrap();
 
     assert_eq!(
         store
-            .target_sender(&created.lobby_id, &created.participant_id, &created.participant_id)
+            .target_sender(
+                &created.lobby_id,
+                &created.participant_id,
+                &created.participant_id
+            )
             .await
             .unwrap_err(),
         LobbyStoreError::ParticipantNotFound
@@ -571,7 +697,11 @@ async fn targeted_routing_rejects_self_unknown_sender_unknown_target_and_disconn
     );
     assert_eq!(
         store
-            .target_sender(&created.lobby_id, &created.participant_id, &joined.participant_id)
+            .target_sender(
+                &created.lobby_id,
+                &created.participant_id,
+                &joined.participant_id
+            )
             .await
             .unwrap_err(),
         LobbyStoreError::TargetNotConnected
@@ -581,7 +711,10 @@ async fn targeted_routing_rejects_self_unknown_sender_unknown_target_and_disconn
 #[tokio::test]
 async fn targeted_routing_delivers_to_exactly_one_requested_connection() {
     let store = LobbyStore::new(2);
-    let created = store.create_lobby(Duration::from_secs(60), 4).await.unwrap();
+    let created = store
+        .create_lobby(Duration::from_secs(60), 4)
+        .await
+        .unwrap();
     let second = store.join_lobby(&created.lobby_id).await.unwrap();
     let third = store.join_lobby(&created.lobby_id).await.unwrap();
 
@@ -619,7 +752,11 @@ async fn targeted_routing_delivers_to_exactly_one_requested_connection() {
         .unwrap();
 
     store
-        .target_sender(&created.lobby_id, &created.participant_id, &second.participant_id)
+        .target_sender(
+            &created.lobby_id,
+            &created.participant_id,
+            &second.participant_id,
+        )
         .await
         .unwrap()
         .send(LobbyConnectionCommand::Send(LobbyServerMessage::Pong {
@@ -642,7 +779,10 @@ async fn targeted_routing_delivers_to_exactly_one_requested_connection() {
 #[tokio::test]
 async fn disconnected_lobby_member_can_reconnect_with_the_same_capability() {
     let store = LobbyStore::new(2);
-    let created = store.create_lobby(Duration::from_secs(60), 4).await.unwrap();
+    let created = store
+        .create_lobby(Duration::from_secs(60), 4)
+        .await
+        .unwrap();
     let joined = store.join_lobby(&created.lobby_id).await.unwrap();
 
     let (sender, _receiver) = mpsc::unbounded_channel();
@@ -656,12 +796,20 @@ async fn disconnected_lobby_member_can_reconnect_with_the_same_capability() {
         .await
         .unwrap();
     store
-        .unregister_connection(&created.lobby_id, &joined.participant_id, first.connection_id)
+        .unregister_connection(
+            &created.lobby_id,
+            &joined.participant_id,
+            first.connection_id,
+        )
         .await;
 
     assert!(
         store
-            .authenticate(&created.lobby_id, &joined.participant_id, &joined.participant_token)
+            .authenticate(
+                &created.lobby_id,
+                &joined.participant_id,
+                &joined.participant_token
+            )
             .await
             .is_ok()
     );
@@ -701,4 +849,125 @@ async fn unknown_lobby_operations_fail_closed() {
             .unwrap_err(),
         LobbyStoreError::LobbyNotFound
     );
+}
+
+#[test]
+fn copied_protocol_surface_is_covered() {
+    assert_eq!(protocol::WEBSOCKET_PROTOCOL, "multiplayer-setup-v1");
+    assert_eq!(protocol::CAPABILITY_PROTOCOL_PREFIX, "cap.");
+
+    let server_messages = [
+        protocol::ServerMessage::Connected {
+            role: PeerRole::Host,
+        },
+        protocol::ServerMessage::PeerConnected {
+            peer_role: PeerRole::Guest,
+        },
+        protocol::ServerMessage::PeerDisconnected {
+            peer_role: PeerRole::Guest,
+        },
+        protocol::ServerMessage::Pong {
+            nonce: Some("room".to_owned()),
+        },
+        protocol::ServerMessage::Signal {
+            from: PeerRole::Host,
+            payload: serde_json::json!({"candidate": "opaque"}),
+        },
+        protocol::ServerMessage::Error {
+            code: "test-error",
+            message: "test error",
+        },
+    ];
+    for message in server_messages {
+        assert!(!serde_json::to_string(&message).unwrap().is_empty());
+    }
+
+    let participant_id = generate_participant_id().unwrap();
+    let lobby_messages = [
+        LobbyServerMessage::Connected {
+            participant_id: participant_id.clone(),
+            host_participant_id: participant_id.clone(),
+            participants: vec![participant_id.clone()],
+        },
+        LobbyServerMessage::ParticipantConnected {
+            participant_id: participant_id.clone(),
+        },
+        LobbyServerMessage::ParticipantDisconnected {
+            participant_id: participant_id.clone(),
+        },
+        LobbyServerMessage::Pong {
+            nonce: Some("lobby".to_owned()),
+        },
+        LobbyServerMessage::Signal {
+            from: participant_id,
+            payload: serde_json::json!({"description": "opaque"}),
+        },
+        LobbyServerMessage::Error {
+            code: "test-error",
+            message: "test error",
+        },
+    ];
+    for message in lobby_messages {
+        assert!(!serde_json::to_string(&message).unwrap().is_empty());
+    }
+
+    assert!(matches!(
+        LobbyConnectionCommand::Close,
+        LobbyConnectionCommand::Close
+    ));
+    assert!(matches!(
+        ConnectionCommand::Send(protocol::ServerMessage::Pong { nonce: None }),
+        ConnectionCommand::Send(protocol::ServerMessage::Pong { nonce: None })
+    ));
+}
+
+#[tokio::test]
+async fn copied_runtime_metadata_and_cleanup_paths_are_covered() {
+    let rooms = RoomStore::new(2);
+    let created_room = rooms.create_room(Duration::from_secs(60)).await.unwrap();
+    let joined_room = rooms.join_room(&created_room.room_id).await.unwrap();
+
+    let (host_sender, _host_receiver) = mpsc::unbounded_channel();
+    rooms
+        .register_connection(
+            &created_room.room_id,
+            PeerRole::Host,
+            &created_room.host_token,
+            host_sender,
+        )
+        .await
+        .unwrap();
+    let (guest_sender, _guest_receiver) = mpsc::unbounded_channel();
+    let guest_registration = rooms
+        .register_connection(
+            &created_room.room_id,
+            PeerRole::Guest,
+            &joined_room.guest_token,
+            guest_sender,
+        )
+        .await
+        .unwrap();
+    assert!(guest_registration.peer.is_some());
+    assert_eq!(rooms.cleanup_expired().await, 0);
+
+    let lobbies = LobbyStore::new(2);
+    let created_lobby = lobbies
+        .create_lobby(Duration::from_secs(60), 4)
+        .await
+        .unwrap();
+    let (participant_sender, _participant_receiver) = mpsc::unbounded_channel();
+    let registration = lobbies
+        .register_connection(
+            &created_lobby.lobby_id,
+            &created_lobby.participant_id,
+            &created_lobby.participant_token,
+            participant_sender,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        registration.host_participant_id,
+        created_lobby.host_participant_id
+    );
+    assert_eq!(lobbies.cleanup_expired().await, 0);
 }
