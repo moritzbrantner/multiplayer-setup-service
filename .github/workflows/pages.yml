@@ -1,0 +1,101 @@
+name: Pages
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate static site
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Check browser JavaScript syntax
+        run: |
+          for file in web/*.js web/*.mjs; do
+            node --check "$file"
+          done
+
+      - name: Check Pages asset graph
+        run: |
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          root = Path("web")
+          required = [
+              root / "index.html",
+              root / "explainer.css",
+              root / "explainer.js",
+              root / "tic-tac-toe.html",
+              root / "pong.html",
+              root / "arena.html",
+          ]
+          for path in required:
+              assert path.is_file() and path.stat().st_size > 0, f"missing Pages asset: {path}"
+
+          class Links(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.links = []
+
+              def handle_starttag(self, tag, attrs):
+                  values = dict(attrs)
+                  key = "href" if tag in {"a", "link"} else "src" if tag == "script" else None
+                  if key and values.get(key):
+                      self.links.append(values[key])
+
+          for html in root.glob("*.html"):
+              parser = Links()
+              parser.feed(html.read_text())
+              for link in parser.links:
+                  parsed = urlparse(link)
+                  if parsed.scheme or parsed.netloc or link.startswith("#"):
+                      continue
+                  relative = parsed.path
+                  if not relative or relative == "./":
+                      continue
+                  target = (html.parent / relative).resolve()
+                  assert root.resolve() in target.parents or target == root.resolve(), f"asset escapes web/: {link}"
+                  assert target.exists(), f"broken local link in {html}: {link}"
+          PY
+
+      - name: Configure GitHub Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
+      - name: Upload GitHub Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: web
+
+  deploy:
+    name: Deploy GitHub Pages
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy artifact
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
