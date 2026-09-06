@@ -250,7 +250,7 @@ export class ContentPeerPool extends EventTarget {
   }
 
   async #handleSignal(peerId, envelope) {
-    if (envelope.reject === "capacity" || envelope.close === true) {
+    if (typeof envelope.reject === "string" || envelope.close === true) {
       const link = this.peers.get(peerId);
       if (link?.connectionId === envelope.connectionId) this.#dropPeer(peerId, false);
       return;
