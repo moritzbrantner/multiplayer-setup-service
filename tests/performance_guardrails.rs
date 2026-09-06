@@ -146,35 +146,22 @@ fn release_service_stays_responsive_under_parallel_http_and_lobby_churn() {
         .map(|_| {
             thread::spawn(move || {
                 for _ in 0..lobbies_per_worker {
-                    let (status, body) = request(
-                        port,
-                        "POST",
-                        "/lobbies",
-                        Some(r#"{"maxParticipants":16}"#),
-                    )
-                    .unwrap();
+                    let (status, body) =
+                        request(port, "POST", "/lobbies", Some(r#"{"maxParticipants":16}"#))
+                            .unwrap();
                     assert_eq!(status, 201);
                     let created = json(&body);
                     let lobby_id = created["lobbyId"].as_str().unwrap().to_owned();
 
                     for _ in 1..16 {
-                        let (status, _) = request(
-                            port,
-                            "POST",
-                            &format!("/lobbies/{lobby_id}/join"),
-                            None,
-                        )
-                        .unwrap();
+                        let (status, _) =
+                            request(port, "POST", &format!("/lobbies/{lobby_id}/join"), None)
+                                .unwrap();
                         assert_eq!(status, 200);
                     }
 
-                    let (status, _) = request(
-                        port,
-                        "POST",
-                        &format!("/lobbies/{lobby_id}/join"),
-                        None,
-                    )
-                    .unwrap();
+                    let (status, _) =
+                        request(port, "POST", &format!("/lobbies/{lobby_id}/join"), None).unwrap();
                     assert_eq!(status, 409);
 
                     let (status, body) =
@@ -208,13 +195,8 @@ fn release_service_stays_responsive_under_parallel_http_and_lobby_churn() {
                     assert_eq!(status, 201);
                     let room_id = json(&body)["roomId"].as_str().unwrap().to_owned();
 
-                    let (status, _) = request(
-                        port,
-                        "POST",
-                        &format!("/rooms/{room_id}/join"),
-                        None,
-                    )
-                    .unwrap();
+                    let (status, _) =
+                        request(port, "POST", &format!("/rooms/{room_id}/join"), None).unwrap();
                     assert_eq!(status, 200);
 
                     let (status, body) =
