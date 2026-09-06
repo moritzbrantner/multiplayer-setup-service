@@ -135,9 +135,7 @@ pub fn is_valid_room_id(value: &str) -> bool {
 
 pub fn is_valid_participant_id(value: &str) -> bool {
     value.len() == PARTICIPANT_ID_LENGTH
-        && value
-            .bytes()
-            .all(|byte| ROOM_CODE_ALPHABET.contains(&byte))
+        && value.bytes().all(|byte| ROOM_CODE_ALPHABET.contains(&byte))
 }
 
 pub fn format_room_code(value: &str) -> Option<String> {
@@ -319,8 +317,7 @@ mod tests {
 
     #[test]
     fn lobby_signals_require_a_valid_target() {
-        let participant_id =
-            generate_participant_id().expect("OS randomness should be available");
+        let participant_id = generate_participant_id().expect("OS randomness should be available");
         let message = parse_lobby_client_message(
             &serde_json::json!({
                 "type": "signal",

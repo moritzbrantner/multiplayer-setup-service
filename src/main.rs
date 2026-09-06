@@ -213,11 +213,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         room_ttl,
     };
 
-    spawn_cleanup(
-        state.rooms.clone(),
-        state.lobbies.clone(),
-        cleanup_interval,
-    );
+    spawn_cleanup(state.rooms.clone(), state.lobbies.clone(), cleanup_interval);
 
     let cors_origins = allowed_origins.clone();
     let cors = CorsLayer::new()
