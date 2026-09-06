@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: validate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -23,15 +23,6 @@ jobs:
         with:
           bun-version: 1.4.0
       - name: Install dependencies
-        run: bun install
-      - name: Persist generated lockfile
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/bun.lock" \
-            -f message='Add reproducible Bun lockfile' \
-            -f content="$(base64 -w0 bun.lock)" \
-            -f branch="${GITHUB_HEAD_REF}"
+        run: bun install --frozen-lockfile
       - name: Validate
         run: bun run check
