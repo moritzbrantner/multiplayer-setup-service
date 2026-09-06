@@ -47,20 +47,12 @@ export default {
 
     const roomRoute = matchRoomRoute(url.pathname);
     if (!roomRoute) {
-      return withCors(
-        request,
-        env,
-        errorResponse("not-found", "Endpoint not found", 404),
-      );
+      return withCors(request, env, errorResponse("not-found", "Endpoint not found", 404));
     }
 
     const roomId = normalizeRoomId(roomRoute.roomId);
     if (!isValidRoomId(roomId)) {
-      return withCors(
-        request,
-        env,
-        errorResponse("invalid-room-id", "Invalid room code", 400),
-      );
+      return withCors(request, env, errorResponse("invalid-room-id", "Invalid room code", 400));
     }
 
     if (request.method === "POST" && roomRoute.action === "join") {
@@ -76,22 +68,14 @@ export default {
         return withCors(
           request,
           env,
-          errorResponse(
-            "websocket-required",
-            "Expected a WebSocket upgrade request",
-            426,
-          ),
+          errorResponse("websocket-required", "Expected a WebSocket upgrade request", 426),
         );
       }
 
       return roomStub(env, roomId).fetch(request);
     }
 
-    return withCors(
-      request,
-      env,
-      errorResponse("method-not-allowed", "Method not allowed", 405),
-    );
+    return withCors(request, env, errorResponse("method-not-allowed", "Method not allowed", 405));
   },
 } satisfies ExportedHandler<Env>;
 
@@ -117,11 +101,7 @@ async function createRoom(env: Env): Promise<Response> {
     }
 
     if (!response.ok) {
-      return errorResponse(
-        "room-initialization-failed",
-        "Could not initialize room",
-        502,
-      );
+      return errorResponse("room-initialization-failed", "Could not initialize room", 502);
     }
 
     return Response.json(
@@ -140,11 +120,7 @@ async function createRoom(env: Env): Promise<Response> {
     );
   }
 
-  return errorResponse(
-    "room-id-exhausted",
-    "Could not allocate a room code",
-    503,
-  );
+  return errorResponse("room-id-exhausted", "Could not allocate a room code", 503);
 }
 
 async function joinRoom(env: Env, roomId: string): Promise<Response> {
@@ -223,10 +199,7 @@ function roomTtlSeconds(env: Env): number {
     return DEFAULT_ROOM_TTL_SECONDS;
   }
 
-  return Math.max(
-    MIN_ROOM_TTL_SECONDS,
-    Math.min(MAX_ROOM_TTL_SECONDS, configured),
-  );
+  return Math.max(MIN_ROOM_TTL_SECONDS, Math.min(MAX_ROOM_TTL_SECONDS, configured));
 }
 
 function ensureOriginAllowed(request: Request, env: Env): Response | null {
