@@ -1,0 +1,31 @@
+[Unit]
+Description=Multiplayer WebRTC setup/signaling service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=multiplayer-setup
+Group=multiplayer-setup
+EnvironmentFile=/etc/multiplayer-setup-service.env
+ExecStart=/opt/multiplayer-setup-service/multiplayer-setup-service
+Restart=on-failure
+RestartSec=2s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
