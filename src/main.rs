@@ -1,3 +1,4 @@
+mod lobby;
 mod protocol;
 mod state;
 
@@ -8,10 +9,12 @@ use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use lobby::{LobbyConnectionCommand, LobbyStore, LobbyStoreError};
 use protocol::{
-    CAPABILITY_PROTOCOL_PREFIX, ClientMessage, ClientMessageError, MAX_SIGNAL_BYTES, PeerRole,
-    ServerMessage, WEBSOCKET_PROTOCOL, format_room_code, is_valid_room_id, normalize_room_id,
-    parse_client_message,
+    CAPABILITY_PROTOCOL_PREFIX, ClientMessage, ClientMessageError, LobbyClientMessage,
+    LobbyServerMessage, MAX_SIGNAL_BYTES, PeerRole, ServerMessage, WEBSOCKET_PROTOCOL,
+    format_room_code, is_valid_participant_id, is_valid_room_id, normalize_room_id,
+    parse_client_message, parse_lobby_client_message,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,13 +36,16 @@ const DEFAULT_CLEANUP_INTERVAL_SECONDS: u64 = 30;
 const MIN_CLEANUP_INTERVAL_SECONDS: u64 = 5;
 const MAX_CLEANUP_INTERVAL_SECONDS: u64 = 300;
 const DEFAULT_MAX_ROOMS: usize = 10_000;
+const DEFAULT_MAX_LOBBIES: usize = 10_000;
 const MAX_MAX_ROOMS: usize = 100_000;
+const MAX_LOBBY_PARTICIPANTS: usize = 16;
 const DEFAULT_ALLOWED_ORIGINS: &str =
     "https://moritzbrantner.github.io,http://localhost:*,http://127.0.0.1:*";
 
 #[derive(Clone)]
 struct AppState {
     rooms: RoomStore,
+    lobbies: LobbyStore,
     allowed_origins: AllowedOrigins,
     room_ttl: Duration,
 }
@@ -73,6 +79,19 @@ impl AllowedOrigins {
 #[derive(Deserialize)]
 struct ConnectQuery {
     role: PeerRole,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LobbyConnectQuery {
+    participant_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateLobbyRequest {
+    #[serde(default = "default_lobby_participants")]
+    max_participants: usize,
 }
 
 #[derive(Serialize)]
@@ -115,6 +134,43 @@ struct StatusResponse {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateLobbyResponse {
+    lobby_id: String,
+    display_code: String,
+    participant_id: String,
+    participant_token: String,
+    host_participant_id: String,
+    expires_at: u64,
+    max_participants: usize,
+    websocket_path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JoinLobbyResponse {
+    lobby_id: String,
+    display_code: String,
+    participant_id: String,
+    participant_token: String,
+    host_participant_id: String,
+    expires_at: u64,
+    max_participants: usize,
+    websocket_path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LobbyStatusResponse {
+    lobby_id: String,
+    display_code: String,
+    host_participant_id: String,
+    participant_count: usize,
+    max_participants: usize,
+    expires_at: u64,
+}
+
+#[derive(Serialize)]
 struct ErrorEnvelope {
     error: ErrorBody,
 }
@@ -145,17 +201,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         MAX_CLEANUP_INTERVAL_SECONDS,
     ));
     let max_rooms = configured_usize("MAX_ROOMS", DEFAULT_MAX_ROOMS, 1, MAX_MAX_ROOMS);
+    let max_lobbies = configured_usize("MAX_LOBBIES", DEFAULT_MAX_LOBBIES, 1, MAX_MAX_ROOMS);
     let allowed_origins = AllowedOrigins::from_config(
         &env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| DEFAULT_ALLOWED_ORIGINS.to_owned()),
     );
 
     let state = AppState {
         rooms: RoomStore::new(max_rooms),
+        lobbies: LobbyStore::new(max_lobbies),
         allowed_origins: allowed_origins.clone(),
         room_ttl,
     };
 
-    spawn_cleanup(state.rooms.clone(), cleanup_interval);
+    spawn_cleanup(
+        state.rooms.clone(),
+        state.lobbies.clone(),
+        cleanup_interval,
+    );
 
     let cors_origins = allowed_origins.clone();
     let cors = CorsLayer::new()
@@ -174,6 +236,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/rooms/{room_id}", get(room_status))
         .route("/rooms/{room_id}/join", post(join_room))
         .route("/rooms/{room_id}/connect", get(connect_room))
+        .route("/lobbies", post(create_lobby))
+        .route("/lobbies/{lobby_id}", get(lobby_status))
+        .route("/lobbies/{lobby_id}/join", post(join_lobby))
+        .route("/lobbies/{lobby_id}/connect", get(connect_lobby))
         .layer(cors)
         .with_state(state);
 
@@ -264,9 +330,7 @@ async fn connect_room(
     Query(query): Query<ConnectQuery>,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok())
-        && !state.allowed_origins.allows(origin)
-    {
+    if !origin_allowed(&state, &headers) {
         return error_response(
             StatusCode::FORBIDDEN,
             "origin-not-allowed",
@@ -282,26 +346,8 @@ async fn connect_room(
         );
     };
 
-    let protocols = websocket_protocols(&headers);
-    if !protocols.contains(&WEBSOCKET_PROTOCOL) {
-        return error_response(
-            StatusCode::UNAUTHORIZED,
-            "invalid-credentials",
-            "A valid role and capability token are required",
-        );
-    }
-
-    let Some(token) = protocols
-        .iter()
-        .find_map(|protocol| protocol.strip_prefix(CAPABILITY_PROTOCOL_PREFIX))
-        .filter(|token| token.len() == 64)
-        .map(ToOwned::to_owned)
-    else {
-        return error_response(
-            StatusCode::UNAUTHORIZED,
-            "invalid-credentials",
-            "A valid role and capability token are required",
-        );
+    let Some(token) = capability_token(&headers) else {
+        return invalid_credentials_response();
     };
 
     if let Err(error) = state.rooms.authenticate(&room_id, query.role, &token).await {
@@ -311,6 +357,139 @@ async fn connect_room(
     ws.max_message_size(MAX_SIGNAL_BYTES)
         .protocols([WEBSOCKET_PROTOCOL])
         .on_upgrade(move |socket| handle_socket(socket, state, room_id, query.role, token))
+}
+
+async fn create_lobby(
+    State(state): State<AppState>,
+    Json(request): Json<CreateLobbyRequest>,
+) -> Response {
+    if !(2..=MAX_LOBBY_PARTICIPANTS).contains(&request.max_participants) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid-lobby-size",
+            "Lobby size must be between 2 and 16 participants",
+        );
+    }
+
+    match state
+        .lobbies
+        .create_lobby(state.room_ttl, request.max_participants)
+        .await
+    {
+        Ok(created) => (
+            StatusCode::CREATED,
+            Json(CreateLobbyResponse {
+                websocket_path: format!("/lobbies/{}/connect", created.lobby_id),
+                lobby_id: created.lobby_id,
+                display_code: created.display_code,
+                participant_id: created.participant_id,
+                participant_token: created.participant_token,
+                host_participant_id: created.host_participant_id,
+                expires_at: created.expires_at,
+                max_participants: created.max_participants,
+            }),
+        )
+            .into_response(),
+        Err(error) => lobby_store_error_response(error),
+    }
+}
+
+async fn join_lobby(State(state): State<AppState>, Path(raw_lobby_id): Path<String>) -> Response {
+    let Some(lobby_id) = validated_room_id(&raw_lobby_id) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid-lobby-id",
+            "Invalid lobby code",
+        );
+    };
+
+    match state.lobbies.join_lobby(&lobby_id).await {
+        Ok(joined) => Json(JoinLobbyResponse {
+            websocket_path: format!("/lobbies/{lobby_id}/connect"),
+            display_code: format_room_code(&lobby_id).expect("validated lobby ID should format"),
+            lobby_id,
+            participant_id: joined.participant_id,
+            participant_token: joined.participant_token,
+            host_participant_id: joined.host_participant_id,
+            expires_at: joined.expires_at,
+            max_participants: joined.max_participants,
+        })
+        .into_response(),
+        Err(error) => lobby_store_error_response(error),
+    }
+}
+
+async fn lobby_status(State(state): State<AppState>, Path(raw_lobby_id): Path<String>) -> Response {
+    let Some(lobby_id) = validated_room_id(&raw_lobby_id) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid-lobby-id",
+            "Invalid lobby code",
+        );
+    };
+
+    match state.lobbies.status(&lobby_id).await {
+        Ok(status) => Json(LobbyStatusResponse {
+            display_code: format_room_code(&lobby_id).expect("validated lobby ID should format"),
+            lobby_id,
+            host_participant_id: status.host_participant_id,
+            participant_count: status.participant_count,
+            max_participants: status.max_participants,
+            expires_at: status.expires_at,
+        })
+        .into_response(),
+        Err(error) => lobby_store_error_response(error),
+    }
+}
+
+async fn connect_lobby(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Path(raw_lobby_id): Path<String>,
+    Query(query): Query<LobbyConnectQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "origin-not-allowed",
+            "Origin is not allowed",
+        );
+    }
+
+    let Some(lobby_id) = validated_room_id(&raw_lobby_id) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid-lobby-id",
+            "Invalid lobby code",
+        );
+    };
+
+    if !is_valid_participant_id(&query.participant_id) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid-participant-id",
+            "Invalid participant identifier",
+        );
+    }
+
+    let Some(token) = capability_token(&headers) else {
+        return invalid_credentials_response();
+    };
+
+    if let Err(error) = state
+        .lobbies
+        .authenticate(&lobby_id, &query.participant_id, &token)
+        .await
+    {
+        return lobby_store_error_response(error);
+    }
+
+    ws.max_message_size(MAX_SIGNAL_BYTES)
+        .protocols([WEBSOCKET_PROTOCOL])
+        .on_upgrade(move |socket| {
+            handle_lobby_socket(socket, state, lobby_id, query.participant_id, token)
+        })
 }
 
 async fn handle_socket(
@@ -406,6 +585,111 @@ async fn handle_socket(
     }
 }
 
+async fn handle_lobby_socket(
+    mut socket: WebSocket,
+    state: AppState,
+    lobby_id: String,
+    participant_id: String,
+    token: String,
+) {
+    let (sender, mut commands) = mpsc::unbounded_channel();
+    let registration = match state
+        .lobbies
+        .register_connection(&lobby_id, &participant_id, &token, sender)
+        .await
+    {
+        Ok(registration) => registration,
+        Err(_) => {
+            let _ = socket.send(Message::Close(None)).await;
+            return;
+        }
+    };
+
+    if let Some(replaced) = registration.replaced {
+        let _ = replaced.send(LobbyConnectionCommand::Close);
+    }
+
+    if send_lobby_server(
+        &mut socket,
+        &LobbyServerMessage::Connected {
+            participant_id: participant_id.clone(),
+            host_participant_id: registration.host_participant_id,
+            participants: registration.participants,
+        },
+    )
+    .await
+    .is_err()
+    {
+        state
+            .lobbies
+            .unregister_connection(&lobby_id, &participant_id, registration.connection_id)
+            .await;
+        return;
+    }
+
+    for peer in registration.connected_peers {
+        let _ = peer.send(LobbyConnectionCommand::Send(
+            LobbyServerMessage::ParticipantConnected {
+                participant_id: participant_id.clone(),
+            },
+        ));
+    }
+
+    loop {
+        tokio::select! {
+            command = commands.recv() => {
+                match command {
+                    Some(LobbyConnectionCommand::Send(message)) => {
+                        if send_lobby_server(&mut socket, &message).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(LobbyConnectionCommand::Close) | None => {
+                        let _ = socket.send(Message::Close(None)).await;
+                        break;
+                    }
+                }
+            }
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(Message::Text(text))) => {
+                        if !handle_lobby_client_text(
+                            &mut socket,
+                            &state,
+                            &lobby_id,
+                            &participant_id,
+                            &text,
+                        )
+                        .await
+                        {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Binary(_))) => {
+                        let _ = socket.send(Message::Close(None)).await;
+                        break;
+                    }
+                    Some(Ok(Message::Ping(_))) => {}
+                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                }
+            }
+        }
+    }
+
+    for peer in state
+        .lobbies
+        .unregister_connection(&lobby_id, &participant_id, registration.connection_id)
+        .await
+    {
+        let _ = peer.send(LobbyConnectionCommand::Send(
+            LobbyServerMessage::ParticipantDisconnected {
+                participant_id: participant_id.clone(),
+            },
+        ));
+    }
+}
+
 async fn handle_client_text(
     socket: &mut WebSocket,
     state: &AppState,
@@ -429,6 +713,38 @@ async fn handle_client_text(
             &ServerMessage::Error {
                 code: "invalid-message",
                 message: "Expected a signaling envelope or ping",
+            },
+        )
+        .await
+        .is_ok(),
+    }
+}
+
+async fn handle_lobby_client_text(
+    socket: &mut WebSocket,
+    state: &AppState,
+    lobby_id: &str,
+    participant_id: &str,
+    text: &str,
+) -> bool {
+    match parse_lobby_client_message(text) {
+        Ok(LobbyClientMessage::Ping { nonce }) => {
+            send_lobby_server(socket, &LobbyServerMessage::Pong { nonce })
+                .await
+                .is_ok()
+        }
+        Ok(LobbyClientMessage::Signal { to, payload }) => {
+            relay_lobby_signal(socket, state, lobby_id, participant_id, &to, payload).await
+        }
+        Err(ClientMessageError::TooLarge) => {
+            let _ = socket.send(Message::Close(None)).await;
+            false
+        }
+        Err(ClientMessageError::Invalid) => send_lobby_server(
+            socket,
+            &LobbyServerMessage::Error {
+                code: "invalid-message",
+                message: "Expected a targeted signaling envelope or ping",
             },
         )
         .await
@@ -476,14 +792,97 @@ async fn relay_signal(
     }
 }
 
+async fn relay_lobby_signal(
+    socket: &mut WebSocket,
+    state: &AppState,
+    lobby_id: &str,
+    participant_id: &str,
+    target_id: &str,
+    payload: Value,
+) -> bool {
+    match state
+        .lobbies
+        .target_sender(lobby_id, participant_id, target_id)
+        .await
+    {
+        Ok(target) => {
+            if target
+                .send(LobbyConnectionCommand::Send(LobbyServerMessage::Signal {
+                    from: participant_id.to_owned(),
+                    payload,
+                }))
+                .is_ok()
+            {
+                true
+            } else {
+                send_lobby_server(
+                    socket,
+                    &LobbyServerMessage::Error {
+                        code: "participant-not-connected",
+                        message: "The target participant is not connected to signaling",
+                    },
+                )
+                .await
+                .is_ok()
+            }
+        }
+        Err(LobbyStoreError::TargetNotConnected) => send_lobby_server(
+            socket,
+            &LobbyServerMessage::Error {
+                code: "participant-not-connected",
+                message: "The target participant is not connected to signaling",
+            },
+        )
+        .await
+        .is_ok(),
+        Err(_) => send_lobby_server(
+            socket,
+            &LobbyServerMessage::Error {
+                code: "invalid-target",
+                message: "The signaling target is not a participant in this lobby",
+            },
+        )
+        .await
+        .is_ok(),
+    }
+}
+
 async fn send_server(socket: &mut WebSocket, message: &ServerMessage) -> Result<(), axum::Error> {
     let text = serde_json::to_string(message).expect("server message should serialize");
+    socket.send(Message::Text(text.into())).await
+}
+
+async fn send_lobby_server(
+    socket: &mut WebSocket,
+    message: &LobbyServerMessage,
+) -> Result<(), axum::Error> {
+    let text = serde_json::to_string(message).expect("lobby server message should serialize");
     socket.send(Message::Text(text.into())).await
 }
 
 fn validated_room_id(raw: &str) -> Option<String> {
     let room_id = normalize_room_id(raw);
     is_valid_room_id(&room_id).then_some(room_id)
+}
+
+fn origin_allowed(state: &AppState, headers: &HeaderMap) -> bool {
+    headers
+        .get(ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .is_none_or(|origin| state.allowed_origins.allows(origin))
+}
+
+fn capability_token(headers: &HeaderMap) -> Option<String> {
+    let protocols = websocket_protocols(headers);
+    if !protocols.contains(&WEBSOCKET_PROTOCOL) {
+        return None;
+    }
+
+    protocols
+        .iter()
+        .find_map(|protocol| protocol.strip_prefix(CAPABILITY_PROTOCOL_PREFIX))
+        .filter(|token| token.len() == 64)
+        .map(ToOwned::to_owned)
 }
 
 fn websocket_protocols(headers: &HeaderMap) -> Vec<&str> {
@@ -495,6 +894,14 @@ fn websocket_protocols(headers: &HeaderMap) -> Vec<&str> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .collect()
+}
+
+fn invalid_credentials_response() -> Response {
+    error_response(
+        StatusCode::UNAUTHORIZED,
+        "invalid-credentials",
+        "A valid capability token is required",
+    )
 }
 
 fn store_error_response(error: StoreError) -> Response {
@@ -509,17 +916,49 @@ fn store_error_response(error: StoreError) -> Response {
             "room-full",
             "Room already has two peers",
         ),
-        StoreError::InvalidCredentials => error_response(
-            StatusCode::UNAUTHORIZED,
-            "invalid-credentials",
-            "A valid role and capability token are required",
-        ),
+        StoreError::InvalidCredentials => invalid_credentials_response(),
         StoreError::Capacity => error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "room-capacity-reached",
             "Room capacity is temporarily exhausted",
         ),
         StoreError::Randomness => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "randomness-unavailable",
+            "Secure randomness is unavailable",
+        ),
+    }
+}
+
+fn lobby_store_error_response(error: LobbyStoreError) -> Response {
+    match error {
+        LobbyStoreError::LobbyNotFound => error_response(
+            StatusCode::NOT_FOUND,
+            "lobby-not-found",
+            "Lobby is not available",
+        ),
+        LobbyStoreError::LobbyFull => error_response(
+            StatusCode::CONFLICT,
+            "lobby-full",
+            "Lobby has reached its participant limit",
+        ),
+        LobbyStoreError::InvalidCredentials => invalid_credentials_response(),
+        LobbyStoreError::ParticipantNotFound => error_response(
+            StatusCode::NOT_FOUND,
+            "participant-not-found",
+            "Participant is not available in this lobby",
+        ),
+        LobbyStoreError::TargetNotConnected => error_response(
+            StatusCode::CONFLICT,
+            "participant-not-connected",
+            "Participant is not connected to signaling",
+        ),
+        LobbyStoreError::Capacity => error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "lobby-capacity-reached",
+            "Lobby capacity is temporarily exhausted",
+        ),
+        LobbyStoreError::Randomness => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "randomness-unavailable",
             "Secure randomness is unavailable",
@@ -547,6 +986,10 @@ fn origin_matches(origin: &str, pattern: &str) -> bool {
         .is_some_and(|prefix| origin.starts_with(&format!("{prefix}:")))
 }
 
+fn default_lobby_participants() -> usize {
+    MAX_LOBBY_PARTICIPANTS
+}
+
 fn configured_u64(name: &str, default: u64, min: u64, max: u64) -> u64 {
     env::var(name)
         .ok()
@@ -563,16 +1006,20 @@ fn configured_usize(name: &str, default: usize, min: usize, max: usize) -> usize
         .clamp(min, max)
 }
 
-fn spawn_cleanup(store: RoomStore, interval: Duration) {
+fn spawn_cleanup(rooms: RoomStore, lobbies: LobbyStore, interval: Duration) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             ticker.tick().await;
-            let expired = store.cleanup_expired().await;
-            if expired > 0 {
-                info!(expired, "expired signaling rooms removed");
+            let expired_rooms = rooms.cleanup_expired().await;
+            let expired_lobbies = lobbies.cleanup_expired().await;
+            if expired_rooms > 0 || expired_lobbies > 0 {
+                info!(
+                    expired_rooms,
+                    expired_lobbies, "expired signaling state removed"
+                );
             }
         }
     });
@@ -632,5 +1079,12 @@ mod tests {
             "https://localhost.example.com:5173",
             "http://localhost:*"
         ));
+    }
+
+    #[test]
+    fn lobby_size_is_bounded_at_sixteen() {
+        assert_eq!(default_lobby_participants(), 16);
+        assert!((2..=MAX_LOBBY_PARTICIPANTS).contains(&16));
+        assert!(!(2..=MAX_LOBBY_PARTICIPANTS).contains(&17));
     }
 }
