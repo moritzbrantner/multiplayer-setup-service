@@ -1,135 +1,247 @@
 # multiplayer-setup-service
 
-A small, game-agnostic rendezvous service for establishing two-player browser multiplayer sessions. It is intended for static clients hosted on GitHub Pages: the service creates a short-lived room and relays WebRTC setup messages, while gameplay moves to a browser-to-browser `RTCDataChannel` after the peers connect.
+Small, provider-neutral rendezvous/signaling service for browser multiplayer games.
+
+The first deployment target is a basic Hetzner VPS. The service is a single Rust binary and keeps short-lived room state only in memory. Game rules and gameplay traffic are intentionally outside this repository.
 
 ## Ownership boundary
 
-This repository owns only multiplayer setup:
+The service owns only connection setup:
 
-- short-lived two-peer rooms;
-- host and guest capability tokens;
-- room claim and expiry;
-- WebSocket signaling transport;
-- bounded opaque signaling envelopes;
-- peer connect/disconnect notifications.
+- create a short-lived two-player room;
+- claim the guest seat once;
+- issue separate host/guest capability tokens;
+- keep only SHA-256 token digests in memory;
+- authenticate WebSocket signaling connections;
+- relay bounded opaque WebRTC offer/answer/ICE messages;
+- report signaling peer connect/disconnect events;
+- replace stale signaling sockets on reconnect;
+- expire abandoned rooms.
 
-It deliberately does **not** own chess rules, game state, matchmaking rankings, gameplay traffic, STUN/TURN infrastructure, or an authoritative anti-cheat server.
+It does **not** own:
 
-## Flow
+- chess or other game rules;
+- gameplay state or moves;
+- STUN/TURN infrastructure;
+- rankings, accounts, matchmaking, spectators, or anti-cheat state.
 
-1. The host calls `POST /rooms` and receives a room code plus a private host token.
-2. The host shares only the room code, normally as part of a GitHub Pages URL.
-3. The guest calls `POST /rooms/:roomId/join` and receives a private guest token. A second guest is rejected.
-4. Both browsers open `/rooms/:roomId/connect?role=...` as WebSockets.
-5. They relay WebRTC offer/answer and ICE data inside `signal` envelopes.
-6. When the `RTCDataChannel` is open, both clients can close their signaling WebSockets. Gameplay no longer needs this service unless the network requires a TURN relay configured by the client.
+Once the browser `RTCDataChannel` is open, the game should stop using this service for gameplay.
 
-Rooms expire after 10 minutes by default. Cloudflare Durable Object alarms delete their persisted room state and close any remaining signaling sockets.
+## Why in-memory state is intentional
+
+A room exists only long enough to establish WebRTC. Restarting the signaling process can invalidate rooms that have not connected yet, but it does not interrupt games whose peer-to-peer DataChannel is already established.
+
+That keeps the first deployment very small:
+
+```text
+GitHub Pages                    Hetzner VPS
+┌─────────────────┐            ┌──────────────────────────┐
+│ browser game A  │── setup ──▶│ Caddy (HTTPS / WSS)      │
+└────────┬────────┘            │          │               │
+         │                     │          ▼               │
+         │                     │ Rust signaling service   │
+         │                     └──────────┬───────────────┘
+         │                                │ setup only
+         │                     ┌──────────▼───────┐
+         └════ WebRTC ═════════│ browser game B  │
+              gameplay         └──────────────────┘
+```
+
+A future Cloudflare, Fly.io, managed WebSocket, or multi-instance backend can implement the same public protocol without changing game semantics.
 
 ## HTTP API
 
 ### `GET /health`
 
-Returns the service and protocol version.
-
-### `POST /rooms`
-
-Creates a room.
+Returns:
 
 ```json
 {
-  "roomId": "4W7K9J3Q2MNP",
-  "displayCode": "4W7K-9J3Q-2MNP",
-  "role": "host",
-  "hostToken": "<private capability>",
-  "expiresAt": 1788705000000,
-  "websocketPath": "/rooms/4W7K9J3Q2MNP/connect"
+  "status": "ok",
+  "service": "multiplayer-setup-service",
+  "protocolVersion": 1
 }
 ```
 
-The room code is a 60-bit Crockford-style code. The host token is separate and must not be shared.
+### `POST /rooms`
+
+Creates a room and returns the host capability:
+
+```json
+{
+  "roomId": "0123ABCDEFGH",
+  "displayCode": "0123-ABCD-EFGH",
+  "role": "host",
+  "hostToken": "<64 hex characters>",
+  "expiresAt": 1788700000000,
+  "websocketPath": "/rooms/0123ABCDEFGH/connect"
+}
+```
 
 ### `POST /rooms/:roomId/join`
 
-Claims the guest slot and returns a private `guestToken`. A room can be claimed only once.
+Claims the one guest seat and returns a guest capability. A second join fails with `409 room-full`.
 
 ### `GET /rooms/:roomId`
 
-Returns `waiting` or `paired` plus the expiry time. It never returns capability tokens.
+Returns `waiting` or `paired` plus the expiration timestamp.
 
 ### `GET /rooms/:roomId/connect?role=host|guest`
 
-Requires a WebSocket upgrade. The browser supplies two WebSocket subprotocols: `multiplayer-setup-v1` and `cap.<private capability token>`. The service selects only `multiplayer-setup-v1`, so the capability does not become part of the WebSocket URL. A newer connection with the same role replaces the older one so a browser can recover from a signaling reconnect.
+WebSocket upgrade endpoint.
+
+The browser supplies these WebSocket subprotocols:
+
+```text
+multiplayer-setup-v1
+cap.<host-or-guest-token>
+```
+
+The service selects `multiplayer-setup-v1`; the capability subprotocol is used only for authentication.
 
 ## Signaling protocol
 
-Client messages are intentionally small and generic:
+Client messages:
 
 ```json
-{ "type": "signal", "payload": { "description": { "type": "offer", "sdp": "..." } } }
+{"type":"signal","payload":{"description":{"type":"offer","sdp":"..."}}}
 ```
 
 ```json
-{ "type": "signal", "payload": { "candidate": { "candidate": "..." } } }
+{"type":"ping","nonce":"optional-client-value"}
 ```
 
-```json
-{ "type": "ping", "nonce": "optional-client-value" }
-```
-
-The peer receives the signal with its sender role:
+Peer-forwarded signal:
 
 ```json
 {
   "type": "signal",
   "from": "host",
-  "payload": { "description": { "type": "offer", "sdp": "..." } }
+  "payload": {
+    "description": {
+      "type": "offer",
+      "sdp": "..."
+    }
+  }
 }
 ```
 
-The service also emits `connected`, `peer-connected`, `peer-disconnected`, `pong`, and `error`. Signaling frames are limited to 32 KiB. The service never interprets or persists the signaling payload.
+The service also emits `connected`, `peer-connected`, `peer-disconnected`, `pong`, and `error`.
 
-## GitHub Pages client sketch
+Signaling messages are limited to 32 KiB. Their payload is opaque and is never persisted.
 
-The WebRTC client remains in the game repository. Its ICE configuration is injected separately so TURN can be added without coupling relay credentials to this service.
+## Configuration
+
+Environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BIND_ADDR` | `127.0.0.1:8787` | Local socket the Rust process listens on |
+| `ROOM_TTL_SECONDS` | `600` | Room lifetime, clamped to 60–3600 seconds |
+| `CLEANUP_INTERVAL_SECONDS` | `30` | Expired-room sweep interval |
+| `MAX_ROOMS` | `10000` | Hard in-memory room cap |
+| `ALLOWED_ORIGINS` | GitHub Pages + localhost patterns | Comma-separated browser origins |
+| `RUST_LOG` | `info` | Runtime log filter |
+
+For production, set `ALLOWED_ORIGINS` to the exact GitHub Pages/custom origins that should use the service.
+
+## Hetzner deployment
+
+The GitHub Pages client is served over HTTPS, so the signaling endpoint must also be HTTPS/WSS. The simplest setup is a DNS name such as `multiplayer.example.com` pointing at the Hetzner server, with Caddy terminating TLS.
+
+### 1. Build the binary
+
+The repository pins Rust in `rust-toolchain.toml`.
+
+```bash
+cargo build --release --locked
+```
+
+The resulting executable is:
+
+```text
+target/release/multiplayer-setup-service
+```
+
+### 2. Install it
+
+```bash
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin multiplayer-setup || true
+sudo install -d -o root -g root -m 0755 /opt/multiplayer-setup-service
+sudo install -o root -g root -m 0755 \
+  target/release/multiplayer-setup-service \
+  /opt/multiplayer-setup-service/multiplayer-setup-service
+
+sudo install -o root -g root -m 0644 \
+  deploy/multiplayer-setup-service.service \
+  /etc/systemd/system/multiplayer-setup-service.service
+
+sudo install -o root -g root -m 0600 \
+  deploy/multiplayer-setup-service.env.example \
+  /etc/multiplayer-setup-service.env
+```
+
+Edit `/etc/multiplayer-setup-service.env`, especially `ALLOWED_ORIGINS`.
+
+Then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now multiplayer-setup-service
+curl http://127.0.0.1:8787/health
+```
+
+### 3. Put Caddy in front
+
+Install Caddy using the package instructions for the server distribution, copy `deploy/Caddyfile.example` into the Caddy configuration, and replace `multiplayer.example.com` with the real DNS name.
+
+Caddy's reverse proxy handles normal HTTP and WebSocket upgrades on the same upstream:
+
+```text
+127.0.0.1:8787
+```
+
+After reloading Caddy, verify:
+
+```text
+https://multiplayer.example.com/health
+```
+
+Do not expose port `8787` publicly; keep it bound to loopback and expose only ports 80/443 through Caddy/firewall rules.
+
+## Browser setup
+
+The game repository owns the `RTCPeerConnection`. The setup service URL is just an injected endpoint:
 
 ```ts
 const created = await fetch(`${setupApi}/rooms`, { method: "POST" }).then((response) =>
   response.json(),
 );
+
 const socketUrl = new URL(created.websocketPath, setupApi);
-socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
+socketUrl.protocol = "wss:";
 socketUrl.searchParams.set("role", "host");
 
-const signaling = new WebSocket(socketUrl, ["multiplayer-setup-v1", `cap.${created.hostToken}`]);
+const signaling = new WebSocket(socketUrl, [
+  "multiplayer-setup-v1",
+  `cap.${created.hostToken}`,
+]);
+
 const peer = new RTCPeerConnection({ iceServers });
 
-// Exchange peer.localDescription and ICE candidates through `signal` envelopes.
-// Once the RTCDataChannel opens, close `signaling` and keep gameplay peer-to-peer.
+// Exchange localDescription and ICE candidates through `signal` envelopes.
+// Once peer.connectionState/DataChannel is ready, gameplay uses WebRTC directly.
 ```
 
-## Cloudflare deployment
+TURN credentials belong in the game's ICE configuration, not in this signaling service.
 
-The implementation uses one SQLite-backed Durable Object per room and the Durable Object WebSocket Hibernation API. `wrangler.jsonc` is the deployment source of truth.
+## Development and validation
 
-Before production deployment, set `ALLOWED_ORIGINS` to the GitHub Pages origins that may create or join rooms. Localhost origins are enabled for development. `ROOM_TTL_SECONDS` is clamped to 60–3600 seconds.
-
-```sh
-bun install
-bun run check
-bun run dev
-bun run deploy
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --all-features --locked
+cargo build --release --locked
 ```
 
-A Cloudflare account is required for deployment. No Cloudflare credentials belong in the repository.
-
-## Security properties
-
-- Host and guest tokens are random capabilities; only SHA-256 digests are persisted.
-- Room codes are shareable identifiers, not authentication secrets.
-- Only two roles can claim a room.
-- Signaling messages are bounded and are not persisted.
-- Browser origins are allowlisted before HTTP or WebSocket traffic reaches a room.
-- Rooms and credentials are short-lived and removed by an alarm.
-
-For ranked or adversarial games, use an authoritative game server instead of trusting either browser. This service is intentionally for setup of casual peer-to-peer sessions.
+The lockfile is committed and CI uses the exact Rust `1.98.0` toolchain.
