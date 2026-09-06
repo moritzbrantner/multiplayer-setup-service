@@ -3,12 +3,10 @@ name: Validate
 on:
   pull_request:
   push:
-    branches:
-      - main
-      - test/extensive-multiplayer-coverage-validation
+    branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: validate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -20,8 +18,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -38,24 +34,11 @@ jobs:
           done
       - name: Test browser networking models
         run: node --test web-tests/*.test.mjs
-      - name: Complete copied-module coverage and canonicalize Rust tests
-        run: |
-          if ! grep -q 'fn copied_protocol_surface_is_covered()' tests/multiplayer_extensive.rs; then
-            cat bootstrap/copied-surface.rs.txt >> tests/multiplayer_extensive.rs
-          fi
-          cargo fmt --all
+      - name: Check formatting
+        run: cargo fmt --all -- --check
       - name: Lint
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: Test
         run: cargo test --all-targets --all-features --locked
       - name: Build release binary
         run: cargo build --release --locked
-      - name: Persist canonical extensive Rust tests
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tests
-          if ! git diff --cached --quiet; then
-            git commit -m "Canonicalize and complete extensive Rust tests"
-            git push origin HEAD:${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}
-          fi
