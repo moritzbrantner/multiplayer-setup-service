@@ -16,6 +16,17 @@ fn peer_session_exposes_reliable_and_realtime_channels() {
 }
 
 #[test]
+fn lobby_session_supports_mesh_and_host_topologies() {
+    let source = web_file("lobby-session.js");
+    assert!(source.contains("topology === \"mesh\""));
+    assert!(source.contains("topology === \"host\""));
+    assert!(source.contains("createDataChannel(\"reliable\""));
+    assert!(source.contains("createDataChannel(\"realtime\""));
+    assert!(source.contains("maxRetransmits: 0"));
+    assert!(source.contains("JSON.stringify({ type: \"signal\", to, payload })"));
+}
+
+#[test]
 fn games_share_the_peer_session_transport() {
     let tic_tac_toe = web_file("tic-tac-toe.js");
     let pong = web_file("pong.js");
@@ -28,9 +39,20 @@ fn games_share_the_peer_session_transport() {
 }
 
 #[test]
+fn input_arena_transmits_commands_and_simulates_locally() {
+    let arena = web_file("arena.js");
+    assert!(arena.contains("./lobby-session.js"));
+    assert!(arena.contains("type: \"step\""));
+    assert!(arena.contains("broadcastReliable"));
+    assert!(arena.contains("player.x + message.dx * 12"));
+    assert!(arena.contains("player.y + message.dy * 12"));
+}
+
+#[test]
 fn demo_pages_are_static_and_locally_linked() {
     let index = web_file("index.html");
     assert!(index.contains("./tic-tac-toe.html"));
     assert!(index.contains("./pong.html"));
+    assert!(index.contains("./arena.html"));
     assert!(!index.contains("/demo/"));
 }

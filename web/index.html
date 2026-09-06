@@ -9,14 +9,16 @@
 <body>
   <main>
     <h1>Multiplayer setup demos</h1>
-    <p>Open the same game in two tabs. Host in one tab, then enter its room code in the other.</p>
+    <p>Run the local demo server, then open the same game in multiple tabs or devices.</p>
     <div class="panel">
       <h2><a href="./tic-tac-toe.html">Tic-Tac-Toe</a></h2>
-      <p>Reliable, ordered WebRTC DataChannel. Each peer validates moves locally.</p>
+      <p>Two-player reliable, ordered WebRTC DataChannel. Each peer validates moves locally.</p>
       <h2><a href="./pong.html">Pong</a></h2>
-      <p>Realtime unordered/unreliable snapshots and paddle input, plus a reliable score/reset channel.</p>
+      <p>Two-player realtime unordered/unreliable snapshots and paddle input, plus a reliable score/reset channel.</p>
+      <h2><a href="./arena.html">Input-only arena</a></h2>
+      <p>2–16 participants using either a full WebRTC mesh or host-spoke topology. Only compact input commands are exchanged; every browser applies the same state transition locally.</p>
     </div>
-    <p class="muted">The signaling WebSocket closes after both DataChannels are open and ICE gathering completes.</p>
+    <p class="muted">Two-player sessions can release signaling after setup. Multi-party lobbies keep signaling available so late participants can establish new peer links during the lobby lifetime.</p>
   </main>
 </body>
 </html>
