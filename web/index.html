@@ -3,22 +3,207 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Multiplayer setup demos</title>
+  <meta name="description" content="How multiplayer-setup-service bootstraps direct WebRTC multiplayer, from rendezvous signaling to 16-player mesh and host-spoke topologies.">
+  <title>Multiplayer setup — how the connection works</title>
   <link rel="stylesheet" href="./common.css">
+  <link rel="stylesheet" href="./explainer.css">
+  <script type="module" src="./explainer.js" defer></script>
 </head>
-<body>
+<body class="explainer-page">
   <main>
-    <h1>Multiplayer setup demos</h1>
-    <p>Run the local demo server, then open the same game in multiple tabs or devices.</p>
-    <div class="panel">
-      <h2><a href="./tic-tac-toe.html">Tic-Tac-Toe</a></h2>
-      <p>Two-player reliable, ordered WebRTC DataChannel. Each peer validates moves locally.</p>
-      <h2><a href="./pong.html">Pong</a></h2>
-      <p>Two-player realtime unordered/unreliable snapshots and paddle input, plus a reliable score/reset channel.</p>
-      <h2><a href="./arena.html">Input-only arena</a></h2>
-      <p>2–16 participants using either a full WebRTC mesh or host-spoke topology. Only compact input commands are exchanged; every browser applies the same state transition locally.</p>
-    </div>
-    <p class="muted">Two-player sessions can release signaling after setup. Multi-party lobbies keep signaling available so late participants can establish new peer links during the lobby lifetime.</p>
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a class="site-mark" href="./">multiplayer-setup-service</a>
+      <div class="site-links">
+        <a href="#mechanism">Mechanism</a>
+        <a href="#topologies">Topologies</a>
+        <a href="#messages">Messages</a>
+        <a href="#try">Try it</a>
+        <a href="https://github.com/moritzbrantner/multiplayer-setup-service">GitHub</a>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <p class="eyebrow">WebRTC rendezvous for browser multiplayer</p>
+      <h1>Connect briefly. Play directly.</h1>
+      <p class="hero-copy">
+        GitHub Pages serves the game. A small setup service introduces the players and relays WebRTC setup data. Once the peer links are ready, gameplay moves onto direct DataChannels whenever the network permits it.
+      </p>
+      <div class="hero-actions">
+        <a class="button-link primary" href="#mechanism">See the mechanism</a>
+        <a class="button-link" href="#try">Open the demos</a>
+      </div>
+    </header>
+
+    <section class="section" id="mechanism">
+      <div class="section-heading">
+        <p class="eyebrow">Three phases</p>
+        <h2>The server gets peers connected. It does not run the game.</h2>
+        <p>The setup service is deliberately narrow: short-lived rooms and lobbies, private capabilities, authenticated WebSocket signaling, and targeted relay of opaque WebRTC setup messages.</p>
+      </div>
+
+      <div class="mechanism-shell" id="mechanism-shell" data-phase="create">
+        <div class="phase-controls" aria-label="Connection phases">
+          <button class="phase-button" type="button" data-phase-button="create" aria-pressed="true">1 · Create lobby</button>
+          <button class="phase-button" type="button" data-phase-button="signal" aria-pressed="false">2 · Exchange signaling</button>
+          <button class="phase-button" type="button" data-phase-button="direct" aria-pressed="false">3 · Direct gameplay</button>
+        </div>
+
+        <div class="mechanism-diagram" aria-label="WebRTC setup architecture">
+          <div class="mechanism-node peer">
+            <strong>Browser A</strong>
+            <span>Static game from GitHub Pages. Holds its own game state and WebRTC connection.</span>
+          </div>
+          <div class="mechanism-arrow" aria-hidden="true"></div>
+          <div class="mechanism-node server">
+            <strong>Setup service</strong>
+            <span>Room/lobby membership, capabilities, and temporary signaling relay.</span>
+          </div>
+          <div class="mechanism-arrow" aria-hidden="true"></div>
+          <div class="mechanism-node peer">
+            <strong>Browser B</strong>
+            <span>Runs the same client logic and validates the same game transitions locally.</span>
+          </div>
+          <div class="mechanism-peer-line">WebRTC DataChannel after setup</div>
+        </div>
+
+        <p class="phase-explanation"><strong id="phase-title"></strong> <span id="phase-body"></span></p>
+      </div>
+    </section>
+
+    <section class="section" id="topologies">
+      <div class="section-heading">
+        <p class="eyebrow">2–16 players</p>
+        <h2>Lobby size and network topology are separate choices.</h2>
+        <p>The service only knows which authenticated participants may exchange signaling. The browser decides whether those participants form a full mesh or connect through a host.</p>
+      </div>
+
+      <div class="topology-shell">
+        <div class="topology-toolbar">
+          <div class="topology-choice" aria-label="Network topology">
+            <button class="topology-button" type="button" data-topology="mesh" aria-pressed="true">Full mesh</button>
+            <button class="topology-button" type="button" data-topology="host" aria-pressed="false">Host-spoke</button>
+          </div>
+          <label class="player-control" for="participant-count-control">
+            <span>Players</span>
+            <input id="participant-count-control" type="range" min="2" max="16" value="16" step="1">
+            <output id="participant-count-output" for="participant-count-control">16</output>
+          </label>
+        </div>
+
+        <div class="topology-visual">
+          <div class="graph-stage">
+            <svg id="network-graph" viewBox="0 0 500 500" role="img" aria-label="Interactive peer connection graph"></svg>
+          </div>
+          <div class="topology-copy" aria-live="polite">
+            <h3 id="topology-title">Full mesh</h3>
+            <p class="topology-result" id="topology-result"></p>
+            <p class="topology-note" id="topology-note"></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="messages">
+      <div class="section-heading">
+        <p class="eyebrow">Input-only synchronization</p>
+        <h2>Send the decision, not the world.</h2>
+        <p>For deterministic games, every player can run the simulation locally. The network carries compact sequenced inputs; each browser applies the same transition to its own copy of state.</p>
+      </div>
+
+      <div class="message-flow" aria-label="Input-only message flow">
+        <div class="flow-step"><span>01 · Player</span><strong>Produces a compact input command.</strong></div>
+        <div class="flow-step"><span>02 · WebRTC</span><strong>Delivers it to the peers required by the topology.</strong></div>
+        <div class="flow-step"><span>03 · Every device</span><strong>Applies the same deterministic calculation locally.</strong></div>
+      </div>
+
+      <div class="code-sample" aria-label="Example multiplayer input message">
+        <pre><code>{
+  "type": "step",
+  "participantId": "7Q1M8X2K",
+  "seq": 42,
+  "dx": 1,
+  "dy": 0
+}</code></pre>
+      </div>
+      <p class="code-caption">No position is authoritative here. The message says what the player did; the resulting position is calculated on every machine. Sequence numbers make duplicate and stale inputs fail closed.</p>
+
+      <table class="channel-table">
+        <thead>
+          <tr><th>Channel</th><th>Semantics</th><th>Typical data</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Reliable</td><td>Ordered delivery; retransmit until delivered.</td><td>Moves, joins, scores, resets, inventory changes, turn-based commands.</td></tr>
+          <tr><td>Realtime</td><td>Unordered, zero retransmits; newest information wins.</td><td>Frequent input/state hints where stale packets are less useful than fresh ones.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" id="ownership">
+      <div class="section-heading">
+        <p class="eyebrow">Ownership boundary</p>
+        <h2>The setup service is infrastructure, not game authority.</h2>
+        <p>Keeping this boundary narrow lets chess, Pong, physics games, card games, and future clients all reuse the same rendezvous service without coupling their rules to it.</p>
+      </div>
+
+      <div class="boundary-shell">
+        <div class="boundary-column server-side">
+          <h3>Setup service owns</h3>
+          <ul>
+            <li>Short-lived rooms and 2–16 player lobbies</li>
+            <li>Participant identities and private capability authentication</li>
+            <li>WebSocket signaling connections and targeted relay</li>
+            <li>Expiry, capacity limits, reconnect replacement, and roster events</li>
+          </ul>
+        </div>
+        <div class="boundary-column">
+          <h3>Peers / game own</h3>
+          <ul>
+            <li>Game rules, simulation, rendering, and local validation</li>
+            <li>Mesh versus host-spoke topology policy</li>
+            <li>Reliable versus freshness-first gameplay messages</li>
+            <li>Input sequencing, state hashes, reconciliation, and rollback as needed</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="try">
+      <div class="section-heading">
+        <p class="eyebrow">Live browser clients</p>
+        <h2>Use the same foundation in three different ways.</h2>
+        <p>The demos are static and can live on GitHub Pages. Hosting or joining a session requires a reachable signaling service; enter its base URL below and the links will carry it into each demo.</p>
+      </div>
+
+      <div class="try-shell">
+        <div class="endpoint-row">
+          <label for="endpoint-input">Setup service URL
+            <input id="endpoint-input" type="url" inputmode="url" placeholder="https://multiplayer.example.com" autocomplete="url">
+          </label>
+          <button id="endpoint-apply" type="button">Use endpoint</button>
+        </div>
+        <p class="endpoint-status" id="endpoint-status" aria-live="polite"></p>
+
+        <div class="demo-list">
+          <a class="demo-link" data-demo-link="./tic-tac-toe.html" href="./tic-tac-toe.html">
+            <strong>Tic-Tac-Toe</strong>
+            <span>Reliable ordered peer-to-peer moves with local validation.</span>
+          </a>
+          <a class="demo-link" data-demo-link="./pong.html" href="./pong.html">
+            <strong>Pong</strong>
+            <span>Realtime updates plus a separate reliable score/reset path.</span>
+          </a>
+          <a class="demo-link" data-demo-link="./arena.html" href="./arena.html">
+            <strong>2–16 player arena</strong>
+            <span>Input-only synchronization with selectable mesh or host-spoke topology.</span>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span>Static explanation and demos · Rust signaling service · WebRTC gameplay transport</span>
+      <a href="https://github.com/moritzbrantner/multiplayer-setup-service">Source on GitHub</a>
+    </footer>
   </main>
 </body>
 </html>
