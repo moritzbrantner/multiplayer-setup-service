@@ -39,6 +39,7 @@ export class ContentSwarmDownloader extends EventTarget {
     peerPool,
     exchange,
     store,
+    cache = null,
     maxSources = DEFAULT_MAX_SOURCES,
     batchSize = DEFAULT_BATCH_SIZE,
     peerReadyTimeoutMs = DEFAULT_PEER_READY_TIMEOUT_MS,
@@ -67,6 +68,9 @@ export class ContentSwarmDownloader extends EventTarget {
     ) {
       throw new Error("ContentSwarmDownloader requires a verified chunk store");
     }
+    if (cache !== null && typeof cache.restorePath !== "function") {
+      throw new Error("ContentSwarmDownloader cache requires restorePath()");
+    }
     validatePositiveInteger(maxSources, "maxSources", MAX_SWARM_SOURCES);
     validatePositiveInteger(batchSize, "batchSize", MAX_CHUNKS_PER_REQUEST);
     if (
@@ -82,6 +86,7 @@ export class ContentSwarmDownloader extends EventTarget {
     this.peerPool = peerPool;
     this.exchange = exchange;
     this.store = store;
+    this.cache = cache;
     this.maxSources = maxSources;
     this.batchSize = batchSize;
     this.peerReadyTimeoutMs = peerReadyTimeoutMs;
@@ -109,6 +114,7 @@ export class ContentSwarmDownloader extends EventTarget {
 
   async #download(path) {
     const file = requireChunkedFile(this.manifest, path);
+    await this.#restoreCache(path);
     let missing = this.store.missingChunks(path);
     if (missing.length === 0) return this.#complete(path, file, []);
 
@@ -205,6 +211,16 @@ export class ContentSwarmDownloader extends EventTarget {
     }
 
     return this.#complete(path, file, [...sourcesUsed].sort());
+  }
+
+  async #restoreCache(path) {
+    if (!this.cache) return;
+    try {
+      const result = await this.cache.restorePath(path, this.store);
+      this.dispatchEvent(new CustomEvent("cache-restored", { detail: result }));
+    } catch (error) {
+      this.dispatchEvent(new CustomEvent("cache-error", { detail: { path, error } }));
+    }
   }
 
   async #prepareSources(advertised) {
