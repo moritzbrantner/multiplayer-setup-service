@@ -29,9 +29,11 @@ jobs:
           node --version
       - name: Check browser modules
         run: |
-          for file in web/*.js; do
+          for file in web/*.js web/*.mjs web-tests/*.mjs; do
             node --check "$file"
           done
+      - name: Test browser networking models
+        run: node --experimental-default-type=module --test web-tests/*.test.mjs
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint
