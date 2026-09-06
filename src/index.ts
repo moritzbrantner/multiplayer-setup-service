@@ -6,7 +6,6 @@ import {
   isValidRoomId,
   normalizeRoomId,
 } from "./protocol";
-import { SignalingRoom } from "./room";
 
 const DEFAULT_ROOM_TTL_SECONDS = 600;
 const MIN_ROOM_TTL_SECONDS = 60;
