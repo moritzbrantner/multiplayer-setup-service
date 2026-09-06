@@ -130,6 +130,7 @@ export async function fetchTrustedManifest(
     method: "GET",
     cache: "no-store",
     credentials: "omit",
+    redirect: "error",
   });
   if (!response.ok) {
     throw new Error(`Trusted manifest request failed with ${response.status}`);
@@ -164,11 +165,16 @@ export async function verifyContent(manifest, path, value) {
   };
 }
 
+function trustedLogicFiles(manifest) {
+  return manifest.files
+    .filter((file) => file.role === "logic")
+    .slice()
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
+
 export async function logicFingerprint(manifest) {
   validateTrustedManifest(manifest);
-  const canonical = manifest.files
-    .filter((file) => file.role === "logic")
-    .toSorted((left, right) => left.path.localeCompare(right.path))
+  const canonical = trustedLogicFiles(manifest)
     .map((file) => `${file.path}\0${file.bytes}\0${file.sha256}`)
     .join("\n");
   const source = `${CONTENT_MANIFEST_PROTOCOL}\n${manifest.game.id}\n${manifest.game.version}\n${canonical}`;
@@ -181,11 +187,8 @@ export async function verifyLogicSet(manifest, contentByPath) {
     throw new Error("contentByPath must be a Map keyed by trusted manifest path");
   }
 
-  const logicFiles = manifest.files
-    .filter((file) => file.role === "logic")
-    .toSorted((left, right) => left.path.localeCompare(right.path));
   const verified = [];
-  for (const file of logicFiles) {
+  for (const file of trustedLogicFiles(manifest)) {
     if (!contentByPath.has(file.path)) {
       throw new Error(`Missing trusted game logic: ${file.path}`);
     }
