@@ -43,6 +43,7 @@ export class ContentSwarmDownloader extends EventTarget {
     batchSize = DEFAULT_BATCH_SIZE,
     peerReadyTimeoutMs = DEFAULT_PEER_READY_TIMEOUT_MS,
   } = {}) {
+    super();
     validateTrustedManifest(manifest);
     if (!discovery || typeof discovery.seedersForPath !== "function") {
       throw new Error("ContentSwarmDownloader requires seeder discovery");
