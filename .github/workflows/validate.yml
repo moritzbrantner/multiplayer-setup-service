@@ -34,21 +34,53 @@ jobs:
           for file in web/*.js; do
             node --check "$file"
           done
-      - name: Canonicalize Rust formatting
-        run: cargo fmt --all
+      - name: Apply canonical Rust fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/lobby.rs")
+          source = path.read_text()
+          old = '''        lobby
+            .participants
+            .iter()
+            .filter_map(|(_, participant)| {
+                participant
+                    .connection
+                    .as_ref()
+                    .map(|connection| connection.sender.clone())
+            })
+            .collect()
+'''
+          new = '''        lobby
+            .participants
+            .values()
+            .filter_map(|participant| {
+                participant
+                    .connection
+                    .as_ref()
+                    .map(|connection| connection.sender.clone())
+            })
+            .collect()
+'''
+          if source.count(old) != 1:
+              raise SystemExit(f"expected exactly one disconnect sender iteration, found {source.count(old)}")
+          path.write_text(source.replace(old, new))
+          PY
+          cargo fmt --all
       - name: Lint
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: Test
         run: cargo test --all-targets --all-features --locked
       - name: Build release binary
         run: cargo build --release --locked
-      - name: Persist canonical Rust formatting
+      - name: Persist canonical Rust fixes
         if: github.event_name == 'pull_request'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src
           if ! git diff --cached --quiet; then
-            git commit -m "Canonicalize multiparty Rust formatting"
+            git commit -m "Canonicalize multiparty Rust implementation"
             git push origin HEAD:${GITHUB_HEAD_REF}
           fi
