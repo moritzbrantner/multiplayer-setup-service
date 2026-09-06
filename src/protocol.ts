@@ -56,9 +56,7 @@ export function formatRoomCode(value: string): string {
 
 export function generateRoomId(): string {
   const random = crypto.getRandomValues(new Uint8Array(ROOM_CODE_LENGTH));
-  return [...random]
-    .map((byte) => ROOM_CODE_ALPHABET[byte & 31])
-    .join("");
+  return [...random].map((byte) => ROOM_CODE_ALPHABET[byte & 31]).join("");
 }
 
 export function generateCapabilityToken(): string {
@@ -66,14 +64,9 @@ export function generateCapabilityToken(): string {
 }
 
 export async function hashCapabilityToken(token: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(token),
-  );
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
 
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export function parseClientMessage(text: string): ParseClientMessageResult {
@@ -94,17 +87,13 @@ export function parseClientMessage(text: string): ParseClientMessageResult {
 
   if (parsed.type === "ping") {
     const nonce = parsed.nonce;
-    if (
-      nonce !== undefined &&
-      (typeof nonce !== "string" || nonce.length > 128)
-    ) {
+    if (nonce !== undefined && (typeof nonce !== "string" || nonce.length > 128)) {
       return { ok: false, code: "invalid-message" };
     }
 
     return {
       ok: true,
-      value:
-        nonce === undefined ? { type: "ping" } : { type: "ping", nonce },
+      value: nonce === undefined ? { type: "ping" } : { type: "ping", nonce },
     };
   }
 
