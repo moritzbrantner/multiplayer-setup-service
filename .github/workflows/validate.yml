@@ -18,11 +18,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.0
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Validate
-        run: bun run check
+      - name: Show Rust toolchain
+        run: |
+          rustc --version --verbose
+          cargo --version
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --all-targets --all-features
+      - name: Build release binary
+        run: cargo build --release
