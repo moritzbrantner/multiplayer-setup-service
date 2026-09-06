@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Peer-to-peer Pong</title>
+  <link rel="stylesheet" href="./common.css">
+  <style>
+    .score { display: flex; justify-content: center; gap: 36px; font-size: 1.4rem; font-weight: 700; margin: 8px 0 14px; }
+    canvas { width: 100%; aspect-ratio: 16 / 9; display: block; background: #111; border-radius: 10px; touch-action: none; }
+    .controls { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <nav><a href="./index.html">Demos</a><a href="./tic-tac-toe.html">Tic-Tac-Toe</a></nav>
+    <h1>Peer-to-peer Pong</h1>
+    <section class="panel lobby" aria-label="Lobby controls">
+      <button id="host" type="button">Host game</button>
+      <span>or</span>
+      <label>Room code <input id="room" autocomplete="off" placeholder="ABCD-EFGH-JKMN"></label>
+      <button id="join" type="button">Join game</button>
+    </section>
+    <p id="status" class="status" aria-live="polite">Not connected.</p>
+    <p id="codeRow" class="hidden">Room: <span id="code" class="room-code"></span></p>
+
+    <section class="panel game-shell">
+      <div class="score"><span>Host <b id="hostScore">0</b></span><span>Guest <b id="guestScore">0</b></span></div>
+      <canvas id="game" width="800" height="450" aria-label="Pong game field"></canvas>
+      <div class="controls">
+        <span id="controlHint" class="muted">Connect two peers to start.</span>
+        <button id="reset" type="button" disabled>Reset score</button>
+      </div>
+    </section>
+    <script type="module" src="./pong.js"></script>
+  </main>
+</body>
+</html>

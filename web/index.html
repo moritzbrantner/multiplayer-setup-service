@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Multiplayer setup demos</title>
+  <link rel="stylesheet" href="./common.css">
+</head>
+<body>
+  <main>
+    <h1>Multiplayer setup demos</h1>
+    <p>Open the same game in two tabs. Host in one tab, then enter its room code in the other.</p>
+    <div class="panel">
+      <h2><a href="./tic-tac-toe.html">Tic-Tac-Toe</a></h2>
+      <p>Reliable, ordered WebRTC DataChannel. Each peer validates moves locally.</p>
+      <h2><a href="./pong.html">Pong</a></h2>
+      <p>Realtime unordered/unreliable snapshots and paddle input, plus a reliable score/reset channel.</p>
+    </div>
+    <p class="muted">The signaling WebSocket closes after both DataChannels are open and ICE gathering completes.</p>
+  </main>
+</body>
+</html>
