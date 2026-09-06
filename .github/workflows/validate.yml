@@ -15,7 +15,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
       - name: Set up Node.js
@@ -34,6 +34,8 @@ jobs:
           done
       - name: Test browser networking models
         run: node --test web-tests/*.test.mjs
+      - name: Test browser performance guardrails
+        run: node --test web-tests/*.perf.mjs
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint
@@ -42,3 +44,5 @@ jobs:
         run: cargo test --all-targets --all-features --locked
       - name: Build release binary
         run: cargo build --release --locked
+      - name: Test release performance guardrails
+        run: cargo test --release --test performance_guardrails --locked -- --nocapture
