@@ -2,6 +2,8 @@ export const CONTENT_MANIFEST_PROTOCOL = "multiplayer-content-manifest-v1";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_MANIFEST_FILES = 10_000;
+const MAX_MANIFEST_CHUNKS = 250_000;
+const MAX_CHUNK_BYTES = 1_048_576;
 const MAX_PATH_LENGTH = 1_024;
 const ALLOWED_ROLES = new Set(["asset", "logic"]);
 
@@ -29,9 +31,9 @@ function requireSafePath(path) {
   return path;
 }
 
-function requireSha256(value) {
+function requireSha256(value, field = "file.sha256") {
   if (typeof value !== "string" || !SHA256_PATTERN.test(value)) {
-    throw new Error("file.sha256 must be a lowercase SHA-256 hex digest");
+    throw new Error(`${field} must be a lowercase SHA-256 hex digest`);
   }
   return value;
 }
@@ -41,6 +43,25 @@ function requireBytes(value) {
     throw new Error("file.bytes must be a non-negative safe integer");
   }
   return value;
+}
+
+function validateChunking(file) {
+  if (file.chunks == null) return 0;
+  if (!isObject(file.chunks)) throw new Error("file.chunks must be an object");
+  if (!Number.isSafeInteger(file.chunks.bytes) || file.chunks.bytes < 1 || file.chunks.bytes > MAX_CHUNK_BYTES) {
+    throw new Error(`file.chunks.bytes must be between 1 and ${MAX_CHUNK_BYTES}`);
+  }
+  if (!Array.isArray(file.chunks.sha256)) {
+    throw new Error("file.chunks.sha256 must be an array");
+  }
+  const expectedChunks = file.bytes === 0 ? 0 : Math.ceil(file.bytes / file.chunks.bytes);
+  if (file.chunks.sha256.length !== expectedChunks) {
+    throw new Error(`file.chunks.sha256 must contain exactly ${expectedChunks} hashes`);
+  }
+  for (const [index, hash] of file.chunks.sha256.entries()) {
+    requireSha256(hash, `file.chunks.sha256[${index}]`);
+  }
+  return expectedChunks;
 }
 
 function isLoopbackHostname(hostname) {
@@ -100,6 +121,7 @@ export function validateTrustedManifest(manifest) {
   }
 
   const paths = new Set();
+  let totalChunks = 0;
   for (const file of manifest.files) {
     if (!isObject(file)) throw new Error("Each manifest file must be an object");
     const path = requireSafePath(file.path);
@@ -109,6 +131,10 @@ export function validateTrustedManifest(manifest) {
     requireSha256(file.sha256);
     if (!ALLOWED_ROLES.has(file.role)) {
       throw new Error("file.role must be 'asset' or 'logic'");
+    }
+    totalChunks += validateChunking(file);
+    if (totalChunks > MAX_MANIFEST_CHUNKS) {
+      throw new Error(`manifest exceeds the ${MAX_MANIFEST_CHUNKS} chunk-hash limit`);
     }
   }
 
@@ -161,6 +187,31 @@ export async function verifyContent(manifest, path, value) {
     path,
     role: file.role,
     bytes: file.bytes,
+    sha256: actualSha256,
+  };
+}
+
+export async function verifyContentChunk(manifest, path, index, value) {
+  const file = manifestFile(manifest, path);
+  if (!file.chunks) throw new Error(`Content does not define trusted chunk hashes: ${path}`);
+  if (!Number.isInteger(index) || index < 0 || index >= file.chunks.sha256.length) {
+    throw new Error(`Invalid chunk index for ${path}: ${index}`);
+  }
+
+  const bytes = await contentBytes(value);
+  const offset = index * file.chunks.bytes;
+  const expectedBytes = Math.min(file.chunks.bytes, file.bytes - offset);
+  if (bytes.byteLength !== expectedBytes) {
+    throw new Error(`Chunk size mismatch for ${path}#${index}: expected ${expectedBytes}, got ${bytes.byteLength}`);
+  }
+  const actualSha256 = await sha256Hex(bytes);
+  if (actualSha256 !== file.chunks.sha256[index]) {
+    throw new Error(`Chunk hash mismatch for ${path}#${index}`);
+  }
+  return {
+    path,
+    index,
+    bytes: expectedBytes,
     sha256: actualSha256,
   };
 }
