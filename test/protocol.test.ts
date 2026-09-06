@@ -16,9 +16,7 @@ describe("room codes", () => {
       const roomId = generateRoomId();
       expect(roomId).toHaveLength(12);
       expect(isValidRoomId(roomId)).toBe(true);
-      expect(formatRoomCode(roomId)).toMatch(
-        /^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/,
-      );
+      expect(formatRoomCode(roomId)).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
     }
   });
 
