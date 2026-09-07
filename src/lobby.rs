@@ -150,9 +150,11 @@ impl LobbyStore {
                 .max(expires_at);
 
             let mut inner = self.inner.lock().await;
-            purge_expired(&mut inner);
             if inner.lobbies.len() >= self.max_lobbies {
-                return Err(LobbyStoreError::Capacity);
+                purge_expired(&mut inner);
+                if inner.lobbies.len() >= self.max_lobbies {
+                    return Err(LobbyStoreError::Capacity);
+                }
             }
             if inner.lobbies.contains_key(&lobby_id) {
                 continue;
@@ -205,7 +207,7 @@ impl LobbyStore {
             let token_hash = hash_capability_token(&participant_token);
 
             let mut inner = self.inner.lock().await;
-            purge_expired(&mut inner);
+            purge_lobby_if_expired(&mut inner, lobby_id);
             let lobby = inner
                 .lobbies
                 .get_mut(lobby_id)
@@ -241,7 +243,7 @@ impl LobbyStore {
 
     pub async fn status(&self, lobby_id: &str) -> Result<LobbyStatus, LobbyStoreError> {
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_lobby_if_expired(&mut inner, lobby_id);
         let lobby = inner
             .lobbies
             .get(lobby_id)
@@ -264,7 +266,7 @@ impl LobbyStore {
     ) -> Result<(), LobbyStoreError> {
         let token_hash = hash_capability_token(token);
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_lobby_if_expired(&mut inner, lobby_id);
         let lobby = inner
             .lobbies
             .get(lobby_id)
@@ -290,7 +292,7 @@ impl LobbyStore {
     ) -> Result<RenewedLobby, LobbyStoreError> {
         let token_hash = hash_capability_token(token);
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_lobby_if_expired(&mut inner, lobby_id);
         let lobby = inner
             .lobbies
             .get_mut(lobby_id)
@@ -336,7 +338,7 @@ impl LobbyStore {
     ) -> Result<LobbyRegistration, LobbyStoreError> {
         let token_hash = hash_capability_token(token);
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_lobby_if_expired(&mut inner, lobby_id);
         let lobby = inner
             .lobbies
             .get_mut(lobby_id)
@@ -433,7 +435,7 @@ impl LobbyStore {
         }
 
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_lobby_if_expired(&mut inner, lobby_id);
         let lobby = inner
             .lobbies
             .get(lobby_id)
@@ -460,6 +462,17 @@ impl LobbyStore {
         let before = inner.lobbies.len();
         purge_expired(&mut inner);
         before - inner.lobbies.len()
+    }
+}
+
+fn purge_lobby_if_expired(inner: &mut Inner, lobby_id: &str) {
+    let now = now_ms();
+    if inner
+        .lobbies
+        .get(lobby_id)
+        .is_some_and(|lobby| lobby.expires_at <= now)
+    {
+        inner.lobbies.remove(lobby_id);
     }
 }
 
