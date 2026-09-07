@@ -98,7 +98,7 @@ pub struct LobbyStatus {
     pub max_expires_at: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenewedLobby {
     pub expires_at: u64,
@@ -123,6 +123,15 @@ impl LobbyStore {
     }
 
     pub async fn create_lobby(
+        &self,
+        ttl: Duration,
+        max_participants: usize,
+    ) -> Result<CreatedLobby, LobbyStoreError> {
+        self.create_lobby_with_max_lifetime(ttl, ttl, max_participants)
+            .await
+    }
+
+    pub async fn create_lobby_with_max_lifetime(
         &self,
         ttl: Duration,
         max_lifetime: Duration,
@@ -481,7 +490,7 @@ mod tests {
     async fn lobby_accepts_sixteen_unique_participants() {
         let store = LobbyStore::new(4);
         let created = store
-            .create_lobby(Duration::from_secs(600), Duration::from_secs(3600), 16)
+            .create_lobby(Duration::from_secs(600), 16)
             .await
             .unwrap();
 
@@ -517,7 +526,7 @@ mod tests {
     async fn participant_capabilities_are_independent() {
         let store = LobbyStore::new(4);
         let created = store
-            .create_lobby(Duration::from_secs(600), Duration::from_secs(3600), 16)
+            .create_lobby(Duration::from_secs(600), 16)
             .await
             .unwrap();
         let joined = store.join_lobby(&created.lobby_id).await.unwrap();
@@ -558,7 +567,11 @@ mod tests {
     async fn only_host_capability_can_renew_lobby() {
         let store = LobbyStore::new(4);
         let created = store
-            .create_lobby(Duration::from_secs(60), Duration::from_secs(180), 4)
+            .create_lobby_with_max_lifetime(
+                Duration::from_secs(60),
+                Duration::from_secs(180),
+                4,
+            )
             .await
             .unwrap();
         let joined = store.join_lobby(&created.lobby_id).await.unwrap();
@@ -591,7 +604,11 @@ mod tests {
     async fn host_renewal_stops_at_absolute_lifetime_cap() {
         let store = LobbyStore::new(4);
         let created = store
-            .create_lobby(Duration::from_secs(60), Duration::from_secs(120), 4)
+            .create_lobby_with_max_lifetime(
+                Duration::from_secs(60),
+                Duration::from_secs(120),
+                4,
+            )
             .await
             .unwrap();
 
@@ -625,7 +642,7 @@ mod tests {
     async fn targeted_routing_reaches_only_the_requested_participant() {
         let store = LobbyStore::new(4);
         let created = store
-            .create_lobby(Duration::from_secs(600), Duration::from_secs(3600), 4)
+            .create_lobby(Duration::from_secs(600), 4)
             .await
             .unwrap();
         let joined = store.join_lobby(&created.lobby_id).await.unwrap();
