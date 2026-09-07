@@ -7,7 +7,9 @@
   <title>Multiplayer setup — how the connection works</title>
   <link rel="stylesheet" href="./common.css">
   <link rel="stylesheet" href="./explainer.css">
+  <link rel="stylesheet" href="./client-code-components.css">
   <script type="module" src="./explainer.js" defer></script>
+  <script type="module" src="./client-code-components.js" defer></script>
 </head>
 <body class="explainer-page">
   <main>
@@ -17,6 +19,7 @@
         <a href="#mechanism">Mechanism</a>
         <a href="#topologies">Topologies</a>
         <a href="#messages">Messages</a>
+        <a href="#client-code">Client code</a>
         <a href="#try">Try it</a>
         <a href="https://github.com/moritzbrantner/multiplayer-setup-service">GitHub</a>
       </div>
@@ -30,6 +33,7 @@
       </p>
       <div class="hero-actions">
         <a class="button-link primary" href="#mechanism">See the mechanism</a>
+        <a class="button-link" href="#client-code">See client code</a>
         <a class="button-link" href="#try">Open the demos</a>
       </div>
     </header>
@@ -165,6 +169,17 @@
           </ul>
         </div>
       </div>
+    </section>
+
+    <section class="section" id="client-code">
+      <div class="section-heading">
+        <p class="eyebrow">Client-side building blocks</p>
+        <h2>Copy the browser primitives into a real game.</h2>
+        <p>These are the same static ES modules used by the repository demos: a two-peer session, a 2–16 player lobby, and optional trusted-manifest asset seeding. The examples expose client policy without turning the setup service into game authority.</p>
+      </div>
+
+      <client-code-gallery></client-code-gallery>
+      <noscript><p class="code-caption">Enable JavaScript to switch between the copyable client examples. The source modules remain available in this static Pages site.</p></noscript>
     </section>
 
     <section class="section" id="try">
