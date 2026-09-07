@@ -82,6 +82,28 @@ fn pages_explainer_documents_the_actual_multiplayer_boundary() {
 }
 
 #[test]
+fn pages_client_code_components_show_supported_browser_apis() {
+    let index = web_file("index.html");
+    let components = web_file("client-code-components.js");
+    let styles = web_file("client-code-components.css");
+
+    assert!(index.contains("id=\"client-code\""));
+    assert!(index.contains("<client-code-gallery>"));
+    assert!(index.contains("./client-code-components.css"));
+    assert!(index.contains("./client-code-components.js"));
+    assert!(index.contains("Copy the browser primitives into a real game."));
+
+    assert!(components.contains("import { PeerSession } from \"./session.js\""));
+    assert!(components.contains("import { LobbySession } from \"./lobby-session.js\""));
+    assert!(components.contains("ContentSeederDiscovery"));
+    assert!(components.contains("contentSharing: true"));
+    assert!(components.contains("customElements.define(\"client-code-example\""));
+    assert!(components.contains("customElements.define(\"client-code-gallery\""));
+    assert!(styles.contains(".client-code-gallery"));
+    assert!(styles.contains(".client-code-shell"));
+}
+
+#[test]
 fn demo_pages_are_static_and_locally_linked() {
     let index = web_file("index.html");
     assert!(index.contains("./tic-tac-toe.html"));
