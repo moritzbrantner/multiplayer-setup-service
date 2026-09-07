@@ -26,6 +26,7 @@ pub struct LobbyStore {
     inner: Arc<Mutex<Inner>>,
     next_connection_id: Arc<AtomicU64>,
     max_lobbies: usize,
+    max_lifetime_multiplier: u32,
 }
 
 #[derive(Default)]
@@ -115,26 +116,21 @@ pub struct LobbyRegistration {
 
 impl LobbyStore {
     pub fn new(max_lobbies: usize) -> Self {
+        Self::new_with_lifetime_multiplier(max_lobbies, 1)
+    }
+
+    pub fn new_with_lifetime_multiplier(max_lobbies: usize, max_lifetime_multiplier: u32) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner::default())),
             next_connection_id: Arc::new(AtomicU64::new(1)),
             max_lobbies,
+            max_lifetime_multiplier: max_lifetime_multiplier.max(1),
         }
     }
 
     pub async fn create_lobby(
         &self,
         ttl: Duration,
-        max_participants: usize,
-    ) -> Result<CreatedLobby, LobbyStoreError> {
-        self.create_lobby_with_max_lifetime(ttl, ttl, max_participants)
-            .await
-    }
-
-    pub async fn create_lobby_with_max_lifetime(
-        &self,
-        ttl: Duration,
-        max_lifetime: Duration,
         max_participants: usize,
     ) -> Result<CreatedLobby, LobbyStoreError> {
         for _ in 0..MAX_ID_CREATION_ATTEMPTS {
@@ -145,6 +141,7 @@ impl LobbyStore {
                 generate_capability_token().map_err(|_| LobbyStoreError::Randomness)?;
             let created_at = now_ms();
             let expires_at = created_at.saturating_add(duration_ms(ttl));
+            let max_lifetime = ttl.saturating_mul(self.max_lifetime_multiplier);
             let max_expires_at = created_at
                 .saturating_add(duration_ms(max_lifetime))
                 .max(expires_at);
@@ -565,9 +562,9 @@ mod tests {
 
     #[tokio::test]
     async fn only_host_capability_can_renew_lobby() {
-        let store = LobbyStore::new(4);
+        let store = LobbyStore::new_with_lifetime_multiplier(4, 3);
         let created = store
-            .create_lobby_with_max_lifetime(Duration::from_secs(60), Duration::from_secs(180), 4)
+            .create_lobby(Duration::from_secs(60), 4)
             .await
             .unwrap();
         let joined = store.join_lobby(&created.lobby_id).await.unwrap();
@@ -598,9 +595,9 @@ mod tests {
 
     #[tokio::test]
     async fn host_renewal_stops_at_absolute_lifetime_cap() {
-        let store = LobbyStore::new(4);
+        let store = LobbyStore::new_with_lifetime_multiplier(4, 2);
         let created = store
-            .create_lobby_with_max_lifetime(Duration::from_secs(60), Duration::from_secs(120), 4)
+            .create_lobby(Duration::from_secs(60), 4)
             .await
             .unwrap();
 
