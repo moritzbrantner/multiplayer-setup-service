@@ -2,6 +2,10 @@
 
 This roadmap keeps `multiplayer-setup-service` responsible for rendezvous/signaling and optional peer-content coordination only. Gameplay state remains game-owned, peers remain untrusted byte transports, and bulk content must never outrank gameplay traffic.
 
+## Status
+
+The reconnect/ICE recovery, TURN fallback, persistent verified cache, and signed-manifest foundations are implemented. Lobby renewal completes the remaining continuity item in Slice 1: only the existing host participant capability may extend signaling lifetime, each renewal is bounded, and renewal never persists or transfers gameplay state.
+
 ## Slice 1 — reconnect, renew, and ICE recovery
 
 Goal: survive transient signaling and peer-transport failures without requiring a new game session.
@@ -11,7 +15,7 @@ Goal: survive transient signaling and peer-transport failures without requiring 
 - Rebuild the roster from the server `connected` event and reconcile missing/stale peer links idempotently.
 - Attempt `RTCPeerConnection.restartIce()` on failed/disconnected peers before replacing the peer connection.
 - Bound reconnect attempts and expose state events so the game can present recovery/failure UI.
-- Add a lobby-renew protocol guarded by the participant capability, with a bounded extension policy and no gameplay persistence.
+- Add a lobby-renew protocol guarded by the host participant capability, with a bounded extension policy and no gameplay persistence.
 - Tests: signaling close/reconnect, duplicate reconnect suppression, failed peer ICE restart, renewal authorization/expiry.
 
 ## Slice 2 — TURN fallback policy
