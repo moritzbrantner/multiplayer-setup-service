@@ -227,7 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState {
         rooms: RoomStore::new(max_rooms),
-        lobbies: LobbyStore::new(max_lobbies),
+        lobbies: LobbyStore::new_with_lifetime_multiplier(max_lobbies, LOBBY_MAX_TTL_MULTIPLIER),
         allowed_origins: allowed_origins.clone(),
         room_ttl,
     };
@@ -389,11 +389,7 @@ async fn create_lobby(
 
     match state
         .lobbies
-        .create_lobby_with_max_lifetime(
-            state.room_ttl,
-            state.room_ttl.saturating_mul(LOBBY_MAX_TTL_MULTIPLIER),
-            request.max_participants,
-        )
+        .create_lobby(state.room_ttl, request.max_participants)
         .await
     {
         Ok(created) => (
