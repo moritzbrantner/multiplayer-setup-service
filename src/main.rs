@@ -389,7 +389,7 @@ async fn create_lobby(
 
     match state
         .lobbies
-        .create_lobby(
+        .create_lobby_with_max_lifetime(
             state.room_ttl,
             state.room_ttl.saturating_mul(LOBBY_MAX_TTL_MULTIPLIER),
             request.max_participants,
