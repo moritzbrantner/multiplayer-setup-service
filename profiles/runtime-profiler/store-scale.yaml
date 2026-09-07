@@ -1,0 +1,11 @@
+schema_version: runtime-profiler/scenario/v1
+id: multiplayer-setup-store-scale-v1
+target:
+  type: command
+  program: ./target/release/profile-stores
+run:
+  warmup_iterations: 1
+  measurement_iterations: 5
+  timeout_seconds: 30
+collectors:
+  - process

@@ -1,0 +1,94 @@
+name: Runtime Profile
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-profile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Compare store-scale runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check out runtime-profiler
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          repository: moritzbrantner/runtime-profiler
+          ref: 8280c95feb2a1075efa0480a9622e40c723e0b3a
+          path: .runtime-profiler-tool
+
+      - name: Build runtime-profiler
+        working-directory: .runtime-profiler-tool
+        run: cargo build --release --locked
+
+      - name: Prepare exact base worktree
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add "$RUNNER_TEMP/multiplayer-base" "$BASE_SHA"
+          mkdir -p "$RUNNER_TEMP/multiplayer-base/src/bin"
+          cp src/bin/profile-stores.rs "$RUNNER_TEMP/multiplayer-base/src/bin/profile-stores.rs"
+
+      - name: Build identical profile workloads
+        run: |
+          cargo build --release --locked --bin profile-stores
+          (
+            cd "$RUNNER_TEMP/multiplayer-base"
+            cargo build --release --locked --bin profile-stores
+          )
+
+      - name: Capture and score exact base against candidate
+        env:
+          PROFILER: ${{ github.workspace }}/.runtime-profiler-tool/target/release/runtime-profiler
+          SCENARIO: ${{ github.workspace }}/profiles/runtime-profiler/store-scale.yaml
+        run: |
+          mkdir -p "$RUNNER_TEMP/runtime-profile"
+          (
+            cd "$RUNNER_TEMP/multiplayer-base"
+            "$PROFILER" capture \
+              --scenario "$SCENARIO" \
+              --output "$RUNNER_TEMP/runtime-profile/reference"
+          )
+          "$PROFILER" capture \
+            --scenario "$SCENARIO" \
+            --output "$RUNNER_TEMP/runtime-profile/candidate"
+          "$PROFILER" validate --bundle "$RUNNER_TEMP/runtime-profile/reference"
+          "$PROFILER" validate --bundle "$RUNNER_TEMP/runtime-profile/candidate"
+          "$PROFILER" score \
+            --reference "$RUNNER_TEMP/runtime-profile/reference" \
+            --candidate "$RUNNER_TEMP/runtime-profile/candidate" \
+            --json | tee "$RUNNER_TEMP/runtime-profile/score.json"
+          "$PROFILER" summarize \
+            --bundle "$RUNNER_TEMP/runtime-profile/reference" \
+            > "$RUNNER_TEMP/runtime-profile/reference-summary.txt"
+          "$PROFILER" summarize \
+            --bundle "$RUNNER_TEMP/runtime-profile/candidate" \
+            > "$RUNNER_TEMP/runtime-profile/candidate-summary.txt"
+          {
+            echo '## runtime-profiler store-scale comparison'
+            echo
+            echo '```json'
+            cat "$RUNNER_TEMP/runtime-profile/score.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: runtime-profile-${{ github.event.pull_request.number }}-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime-profile
+          if-no-files-found: error
+          retention-days: 14
