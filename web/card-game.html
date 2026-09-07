@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Four-player color-match card game</title>
+  <link rel="stylesheet" href="./common.css">
+  <link rel="stylesheet" href="./card-game.css">
+</head>
+<body>
+  <main>
+    <nav><a href="./index.html">Demos</a><a href="./pong.html">Pong</a><a href="./arena.html">16-player arena</a></nav>
+    <h1>Four-player color-match card game</h1>
+    <p>An UNO-style showcase for hidden hands and host-validated turns. The setup service only connects peers; the host browser owns this demo's deck, hands, turn order, and rule validation.</p>
+
+    <section class="panel" aria-label="Lobby controls">
+      <div class="lobby">
+        <button id="host" type="button">Host 4-player lobby</button>
+        <span>or</span>
+        <label>Lobby code <input id="code" autocomplete="off" placeholder="ABCD-EFGH-JKMN"></label>
+        <button id="join" type="button">Join game</button>
+      </div>
+      <p id="status" class="status" aria-live="polite">Not connected.</p>
+      <p id="lobby-state" class="muted">No lobby yet.</p>
+      <p id="invite" class="muted"></p>
+      <button id="start" type="button" disabled>Start with connected players</button>
+      <p class="muted">The lobby allows up to four players and can start with 2–4 so the demo is testable with fewer devices.</p>
+    </section>
+
+    <section id="game" class="game-shell hidden">
+      <div class="card-layout">
+        <div class="card-table">
+          <div class="card-table-head">
+            <div>
+              <p class="muted">Top card</p>
+              <div id="top-card" class="top-card" aria-live="polite"></div>
+            </div>
+            <div>
+              <p class="muted">Turn</p>
+              <strong id="turn"></strong>
+            </div>
+          </div>
+          <p id="game-event" class="status" aria-live="polite"></p>
+          <div>
+            <h2>Your hand</h2>
+            <div id="hand" class="hand" aria-label="Your cards"></div>
+          </div>
+          <div class="card-actions">
+            <button id="draw" type="button" disabled>Draw one and pass</button>
+            <span class="muted">Play a card matching either color or number.</span>
+          </div>
+        </div>
+        <aside>
+          <h2>Players</h2>
+          <ul id="players" class="player-list"></ul>
+          <p class="muted">Only hand counts are public. Each guest receives only its own cards.</p>
+        </aside>
+      </div>
+    </section>
+
+    <section class="panel security-panel" aria-labelledby="security-heading">
+      <h2 id="security-heading">Bad-message probe</h2>
+      <p>These buttons deliberately behave like a modified client. The host must reject the intent instead of trusting the sender.</p>
+      <div class="security-actions">
+        <button id="forge-card" type="button" disabled>Send forged card ID</button>
+        <button id="replay-intent" type="button" disabled>Replay last intent</button>
+      </div>
+      <p id="security-result" class="security-result muted" aria-live="polite">Start a game to exercise the validation boundary.</p>
+      <p class="muted">This stops guest-side message forgery, but it does not make the host trustworthy. The host still sees every hand and chooses the shuffle seed; competitive hidden-information games need a trusted gameplay server or a verifiable multi-party shuffle/commit-reveal protocol.</p>
+    </section>
+
+    <script type="module" src="./card-game.js"></script>
+  </main>
+</body>
+</html>

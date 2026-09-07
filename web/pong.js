@@ -1,3 +1,4 @@
+import { movePaddleToward, mayAcceptPongScore } from "./pong-model.mjs";
 import { PeerSession } from "./session.js";
 
 const WIDTH = 800;
@@ -18,6 +19,8 @@ const hostScore = document.querySelector("#hostScore");
 const guestScore = document.querySelector("#guestScore");
 const controlHint = document.querySelector("#controlHint");
 const resetButton = document.querySelector("#reset");
+const forgeScoreButton = document.querySelector("#forgeScore");
+const securityStatus = document.querySelector("#securityStatus");
 const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d");
 
@@ -82,7 +85,14 @@ function score(side) {
 
 function updateHost(dt) {
   world.leftY = clampPaddle(world.leftY + localDirection * PADDLE_SPEED * dt);
-  world.rightY += (targetGuestY - world.rightY) * Math.min(1, dt * 14);
+  world.rightY = movePaddleToward(
+    world.rightY,
+    targetGuestY,
+    dt,
+    PADDLE_SPEED,
+    PADDLE_H / 2,
+    HEIGHT - PADDLE_H / 2,
+  );
 
   world.ballX += world.ballVx * dt;
   world.ballY += world.ballVy * dt;
@@ -201,6 +211,10 @@ function attachSession(next) {
       ? "You are the left paddle. Use W/S or drag/tap on the field."
       : "You are the right paddle. Use ↑/↓ or drag/tap on the field.";
     resetButton.disabled = session.role !== "host";
+    forgeScoreButton.disabled = session.role !== "guest";
+    securityStatus.textContent = session.role === "host"
+      ? "Host owns ball physics and scoring; guest score publications will be rejected."
+      : "Guest may send paddle targets, but not scores or ball state.";
   });
   session.addEventListener("realtime", (event) => {
     const message = event.detail;
@@ -213,13 +227,22 @@ function attachSession(next) {
   session.addEventListener("reliable", (event) => {
     const message = event.detail;
     if (message?.kind === "pong-score") {
-      world.hostScore = message.hostScore;
-      world.guestScore = message.guestScore;
-      updateScoreUi(world.hostScore, world.guestScore);
+      if (session.role === "host") {
+        securityStatus.textContent = "Blocked forged guest score: only the host may publish score state.";
+        session.sendReliable({ kind: "pong-security-result", accepted: false, reason: "score-authority" });
+      } else if (mayAcceptPongScore(session.role, message)) {
+        world.hostScore = message.hostScore;
+        world.guestScore = message.guestScore;
+        updateScoreUi(world.hostScore, world.guestScore);
+      }
     } else if (message?.kind === "pong-reset" && session.role === "guest") {
       world.hostScore = 0;
       world.guestScore = 0;
       updateScoreUi(0, 0);
+    } else if (message?.kind === "pong-security-result" && session.role === "guest") {
+      securityStatus.textContent = message.accepted
+        ? "Unexpected: host accepted the probe."
+        : "Host rejected the forged score as expected.";
     }
   });
   session.addEventListener("error", (event) => {
@@ -256,6 +279,12 @@ function resetScores() {
   session.sendReliable({ kind: "pong-reset" });
 }
 
+function attemptForgedScore() {
+  if (session?.role !== "guest" || !ready) return;
+  securityStatus.textContent = "Sending a deliberately forged 99–0 score from the guest…";
+  session.sendReliable({ kind: "pong-score", hostScore: 99, guestScore: 0, probe: "forged-guest-score" });
+}
+
 canvas.addEventListener("pointerdown", setLocalPaddleFromPointer);
 canvas.addEventListener("pointermove", (event) => {
   if (event.buttons !== 0 || event.pointerType === "touch") setLocalPaddleFromPointer(event);
@@ -273,4 +302,5 @@ window.addEventListener("keyup", (event) => {
 hostButton.addEventListener("click", () => connect("host"));
 joinButton.addEventListener("click", () => connect("join"));
 resetButton.addEventListener("click", resetScores);
+forgeScoreButton.addEventListener("click", attemptForgedScore);
 requestAnimationFrame(frame);
