@@ -116,15 +116,18 @@ pub struct LobbyRegistration {
 
 impl LobbyStore {
     pub fn new(max_lobbies: usize) -> Self {
-        Self::new_with_lifetime_multiplier(max_lobbies, 1)
-    }
-
-    pub fn new_with_lifetime_multiplier(max_lobbies: usize, max_lifetime_multiplier: u32) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner::default())),
             next_connection_id: Arc::new(AtomicU64::new(1)),
             max_lobbies,
+            max_lifetime_multiplier: 1,
+        }
+    }
+
+    pub fn new_with_lifetime_multiplier(max_lobbies: usize, max_lifetime_multiplier: u32) -> Self {
+        Self {
             max_lifetime_multiplier: max_lifetime_multiplier.max(1),
+            ..Self::new(max_lobbies)
         }
     }
 
