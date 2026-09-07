@@ -493,12 +493,7 @@ async fn renew_lobby(
 
     match state
         .lobbies
-        .renew_lobby(
-            &lobby_id,
-            &request.participant_id,
-            &token,
-            state.room_ttl,
-        )
+        .renew_lobby(&lobby_id, &request.participant_id, &token, state.room_ttl)
         .await
     {
         Ok(renewed) => Json(RenewLobbyResponse {
