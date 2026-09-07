@@ -567,11 +567,7 @@ mod tests {
     async fn only_host_capability_can_renew_lobby() {
         let store = LobbyStore::new(4);
         let created = store
-            .create_lobby_with_max_lifetime(
-                Duration::from_secs(60),
-                Duration::from_secs(180),
-                4,
-            )
+            .create_lobby_with_max_lifetime(Duration::from_secs(60), Duration::from_secs(180), 4)
             .await
             .unwrap();
         let joined = store.join_lobby(&created.lobby_id).await.unwrap();
@@ -604,11 +600,7 @@ mod tests {
     async fn host_renewal_stops_at_absolute_lifetime_cap() {
         let store = LobbyStore::new(4);
         let created = store
-            .create_lobby_with_max_lifetime(
-                Duration::from_secs(60),
-                Duration::from_secs(120),
-                4,
-            )
+            .create_lobby_with_max_lifetime(Duration::from_secs(60), Duration::from_secs(120), 4)
             .await
             .unwrap();
 
