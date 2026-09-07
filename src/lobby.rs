@@ -35,6 +35,7 @@ struct Inner {
 
 struct Lobby {
     expires_at: u64,
+    max_expires_at: u64,
     host_participant_id: String,
     max_participants: usize,
     participants: HashMap<String, Participant>,
@@ -53,11 +54,13 @@ struct Connection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LobbyStoreError {
     Capacity,
+    HostRequired,
     InvalidCredentials,
     LobbyFull,
     LobbyNotFound,
     ParticipantNotFound,
     Randomness,
+    RenewalLimitReached,
     TargetNotConnected,
 }
 
@@ -70,6 +73,7 @@ pub struct CreatedLobby {
     pub participant_token: String,
     pub host_participant_id: String,
     pub expires_at: u64,
+    pub max_expires_at: u64,
     pub max_participants: usize,
 }
 
@@ -80,6 +84,7 @@ pub struct JoinedLobby {
     pub participant_token: String,
     pub host_participant_id: String,
     pub expires_at: u64,
+    pub max_expires_at: u64,
     pub max_participants: usize,
 }
 
@@ -90,6 +95,14 @@ pub struct LobbyStatus {
     pub participant_count: usize,
     pub max_participants: usize,
     pub expires_at: u64,
+    pub max_expires_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenewedLobby {
+    pub expires_at: u64,
+    pub max_expires_at: u64,
 }
 
 pub struct LobbyRegistration {
@@ -112,6 +125,7 @@ impl LobbyStore {
     pub async fn create_lobby(
         &self,
         ttl: Duration,
+        max_lifetime: Duration,
         max_participants: usize,
     ) -> Result<CreatedLobby, LobbyStoreError> {
         for _ in 0..MAX_ID_CREATION_ATTEMPTS {
@@ -120,7 +134,11 @@ impl LobbyStore {
                 generate_participant_id().map_err(|_| LobbyStoreError::Randomness)?;
             let participant_token =
                 generate_capability_token().map_err(|_| LobbyStoreError::Randomness)?;
-            let expires_at = now_ms().saturating_add(duration_ms(ttl));
+            let created_at = now_ms();
+            let expires_at = created_at.saturating_add(duration_ms(ttl));
+            let max_expires_at = created_at
+                .saturating_add(duration_ms(max_lifetime))
+                .max(expires_at);
 
             let mut inner = self.inner.lock().await;
             purge_expired(&mut inner);
@@ -144,6 +162,7 @@ impl LobbyStore {
                 lobby_id.clone(),
                 Lobby {
                     expires_at,
+                    max_expires_at,
                     host_participant_id: participant_id.clone(),
                     max_participants,
                     participants,
@@ -160,6 +179,7 @@ impl LobbyStore {
                 participant_id,
                 participant_token,
                 expires_at,
+                max_expires_at,
                 max_participants,
             });
         }
@@ -202,6 +222,7 @@ impl LobbyStore {
                 participant_token,
                 host_participant_id: lobby.host_participant_id.clone(),
                 expires_at: lobby.expires_at,
+                max_expires_at: lobby.max_expires_at,
                 max_participants: lobby.max_participants,
             });
         }
@@ -222,6 +243,7 @@ impl LobbyStore {
             participant_count: lobby.participants.len(),
             max_participants: lobby.max_participants,
             expires_at: lobby.expires_at,
+            max_expires_at: lobby.max_expires_at,
         })
     }
 
@@ -248,6 +270,52 @@ impl LobbyStore {
         } else {
             Err(LobbyStoreError::InvalidCredentials)
         }
+    }
+
+    pub async fn renew_lobby(
+        &self,
+        lobby_id: &str,
+        participant_id: &str,
+        token: &str,
+        extension: Duration,
+    ) -> Result<RenewedLobby, LobbyStoreError> {
+        let token_hash = hash_capability_token(token);
+        let mut inner = self.inner.lock().await;
+        purge_expired(&mut inner);
+        let lobby = inner
+            .lobbies
+            .get_mut(lobby_id)
+            .ok_or(LobbyStoreError::LobbyNotFound)?;
+
+        if lobby.host_participant_id != participant_id {
+            return Err(LobbyStoreError::HostRequired);
+        }
+
+        let participant = lobby
+            .participants
+            .get(participant_id)
+            .ok_or(LobbyStoreError::ParticipantNotFound)?;
+        if !hashes_equal(&participant.token_hash, &token_hash) {
+            return Err(LobbyStoreError::InvalidCredentials);
+        }
+
+        if lobby.expires_at >= lobby.max_expires_at {
+            return Err(LobbyStoreError::RenewalLimitReached);
+        }
+
+        let next_expires_at = lobby
+            .expires_at
+            .saturating_add(duration_ms(extension))
+            .min(lobby.max_expires_at);
+        if next_expires_at <= lobby.expires_at {
+            return Err(LobbyStoreError::RenewalLimitReached);
+        }
+
+        lobby.expires_at = next_expires_at;
+        Ok(RenewedLobby {
+            expires_at: lobby.expires_at,
+            max_expires_at: lobby.max_expires_at,
+        })
     }
 
     pub async fn register_connection(
@@ -413,7 +481,7 @@ mod tests {
     async fn lobby_accepts_sixteen_unique_participants() {
         let store = LobbyStore::new(4);
         let created = store
-            .create_lobby(Duration::from_secs(600), 16)
+            .create_lobby(Duration::from_secs(600), Duration::from_secs(3600), 16)
             .await
             .unwrap();
 
@@ -449,7 +517,7 @@ mod tests {
     async fn participant_capabilities_are_independent() {
         let store = LobbyStore::new(4);
         let created = store
-            .create_lobby(Duration::from_secs(600), 16)
+            .create_lobby(Duration::from_secs(600), Duration::from_secs(3600), 16)
             .await
             .unwrap();
         let joined = store.join_lobby(&created.lobby_id).await.unwrap();
@@ -487,10 +555,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn only_host_capability_can_renew_lobby() {
+        let store = LobbyStore::new(4);
+        let created = store
+            .create_lobby(Duration::from_secs(60), Duration::from_secs(180), 4)
+            .await
+            .unwrap();
+        let joined = store.join_lobby(&created.lobby_id).await.unwrap();
+
+        assert_eq!(
+            store
+                .renew_lobby(
+                    &created.lobby_id,
+                    &joined.participant_id,
+                    &joined.participant_token,
+                    Duration::from_secs(60),
+                )
+                .await,
+            Err(LobbyStoreError::HostRequired)
+        );
+        assert_eq!(
+            store
+                .renew_lobby(
+                    &created.lobby_id,
+                    &created.participant_id,
+                    &joined.participant_token,
+                    Duration::from_secs(60),
+                )
+                .await,
+            Err(LobbyStoreError::InvalidCredentials)
+        );
+    }
+
+    #[tokio::test]
+    async fn host_renewal_stops_at_absolute_lifetime_cap() {
+        let store = LobbyStore::new(4);
+        let created = store
+            .create_lobby(Duration::from_secs(60), Duration::from_secs(120), 4)
+            .await
+            .unwrap();
+
+        let renewed = store
+            .renew_lobby(
+                &created.lobby_id,
+                &created.participant_id,
+                &created.participant_token,
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        assert_eq!(renewed.expires_at, created.max_expires_at);
+        assert_eq!(renewed.max_expires_at, created.max_expires_at);
+        assert!(renewed.expires_at > created.expires_at);
+
+        assert_eq!(
+            store
+                .renew_lobby(
+                    &created.lobby_id,
+                    &created.participant_id,
+                    &created.participant_token,
+                    Duration::from_secs(60),
+                )
+                .await,
+            Err(LobbyStoreError::RenewalLimitReached)
+        );
+    }
+
+    #[tokio::test]
     async fn targeted_routing_reaches_only_the_requested_participant() {
         let store = LobbyStore::new(4);
         let created = store
-            .create_lobby(Duration::from_secs(600), 4)
+            .create_lobby(Duration::from_secs(600), Duration::from_secs(3600), 4)
             .await
             .unwrap();
         let joined = store.join_lobby(&created.lobby_id).await.unwrap();
