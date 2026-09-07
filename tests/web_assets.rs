@@ -21,13 +21,19 @@ fn peer_session_exposes_reliable_and_realtime_channels() {
 
 #[test]
 fn lobby_session_supports_mesh_and_host_topologies() {
-    let source = web_file("lobby-session.js");
+    let entrypoint = web_file("lobby-session.js");
+    assert!(entrypoint.contains("ResilientLobbySession as LobbySession"));
+    assert!(entrypoint.contains("./resilient-lobby-session.js"));
+
+    let source = web_file("resilient-lobby-session.js");
     assert!(source.contains("topology === \"mesh\""));
     assert!(source.contains("topology === \"host\""));
     assert!(source.contains("createDataChannel(\"reliable\""));
     assert!(source.contains("createDataChannel(\"realtime\""));
     assert!(source.contains("maxRetransmits: 0"));
     assert!(source.contains("JSON.stringify({ type: \"signal\", to, payload })"));
+    assert!(source.contains("restartIce()"));
+    assert!(source.contains("iceRestart: true"));
 }
 
 #[test]
