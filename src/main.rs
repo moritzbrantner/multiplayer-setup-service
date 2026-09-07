@@ -4,7 +4,7 @@ mod state;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::header::{CONTENT_TYPE, ORIGIN, SEC_WEBSOCKET_PROTOCOL};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ORIGIN, SEC_WEBSOCKET_PROTOCOL};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -39,6 +39,7 @@ const DEFAULT_MAX_ROOMS: usize = 10_000;
 const DEFAULT_MAX_LOBBIES: usize = 10_000;
 const MAX_MAX_ROOMS: usize = 100_000;
 const MAX_LOBBY_PARTICIPANTS: usize = 16;
+const LOBBY_MAX_TTL_MULTIPLIER: u32 = 6;
 const DEFAULT_ALLOWED_ORIGINS: &str =
     "https://moritzbrantner.github.io,http://localhost:*,http://127.0.0.1:*";
 
@@ -94,6 +95,12 @@ struct CreateLobbyRequest {
     max_participants: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenewLobbyRequest {
+    participant_id: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HealthResponse {
@@ -142,6 +149,7 @@ struct CreateLobbyResponse {
     participant_token: String,
     host_participant_id: String,
     expires_at: u64,
+    max_expires_at: u64,
     max_participants: usize,
     websocket_path: String,
 }
@@ -155,6 +163,7 @@ struct JoinLobbyResponse {
     participant_token: String,
     host_participant_id: String,
     expires_at: u64,
+    max_expires_at: u64,
     max_participants: usize,
     websocket_path: String,
 }
@@ -168,6 +177,16 @@ struct LobbyStatusResponse {
     participant_count: usize,
     max_participants: usize,
     expires_at: u64,
+    max_expires_at: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenewLobbyResponse {
+    lobby_id: String,
+    display_code: String,
+    expires_at: u64,
+    max_expires_at: u64,
 }
 
 #[derive(Serialize)]
@@ -223,7 +242,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .is_ok_and(|origin| cors_origins.allows(origin))
         }))
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([CONTENT_TYPE])
+        .allow_headers([CONTENT_TYPE, AUTHORIZATION])
         .max_age(Duration::from_secs(86_400));
 
     let app = Router::new()
@@ -235,6 +254,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/lobbies", post(create_lobby))
         .route("/lobbies/{lobby_id}", get(lobby_status))
         .route("/lobbies/{lobby_id}/join", post(join_lobby))
+        .route("/lobbies/{lobby_id}/renew", post(renew_lobby))
         .route("/lobbies/{lobby_id}/connect", get(connect_lobby))
         .layer(cors)
         .with_state(state);
@@ -369,7 +389,11 @@ async fn create_lobby(
 
     match state
         .lobbies
-        .create_lobby(state.room_ttl, request.max_participants)
+        .create_lobby(
+            state.room_ttl,
+            state.room_ttl.saturating_mul(LOBBY_MAX_TTL_MULTIPLIER),
+            request.max_participants,
+        )
         .await
     {
         Ok(created) => (
@@ -382,6 +406,7 @@ async fn create_lobby(
                 participant_token: created.participant_token,
                 host_participant_id: created.host_participant_id,
                 expires_at: created.expires_at,
+                max_expires_at: created.max_expires_at,
                 max_participants: created.max_participants,
             }),
         )
@@ -408,6 +433,7 @@ async fn join_lobby(State(state): State<AppState>, Path(raw_lobby_id): Path<Stri
             participant_token: joined.participant_token,
             host_participant_id: joined.host_participant_id,
             expires_at: joined.expires_at,
+            max_expires_at: joined.max_expires_at,
             max_participants: joined.max_participants,
         })
         .into_response(),
@@ -432,6 +458,54 @@ async fn lobby_status(State(state): State<AppState>, Path(raw_lobby_id): Path<St
             participant_count: status.participant_count,
             max_participants: status.max_participants,
             expires_at: status.expires_at,
+            max_expires_at: status.max_expires_at,
+        })
+        .into_response(),
+        Err(error) => lobby_store_error_response(error),
+    }
+}
+
+async fn renew_lobby(
+    State(state): State<AppState>,
+    Path(raw_lobby_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<RenewLobbyRequest>,
+) -> Response {
+    let Some(lobby_id) = validated_room_id(&raw_lobby_id) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid-lobby-id",
+            "Invalid lobby code",
+        );
+    };
+
+    if !is_valid_participant_id(&request.participant_id) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid-participant-id",
+            "Invalid participant identifier",
+        );
+    }
+
+    let Some(token) = bearer_capability_token(&headers) else {
+        return invalid_credentials_response();
+    };
+
+    match state
+        .lobbies
+        .renew_lobby(
+            &lobby_id,
+            &request.participant_id,
+            &token,
+            state.room_ttl,
+        )
+        .await
+    {
+        Ok(renewed) => Json(RenewLobbyResponse {
+            display_code: format_room_code(&lobby_id).expect("validated lobby ID should format"),
+            lobby_id,
+            expires_at: renewed.expires_at,
+            max_expires_at: renewed.max_expires_at,
         })
         .into_response(),
         Err(error) => lobby_store_error_response(error),
@@ -881,6 +955,12 @@ fn capability_token(headers: &HeaderMap) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn bearer_capability_token(headers: &HeaderMap) -> Option<String> {
+    let header = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = header.split_once(' ')?;
+    (scheme.eq_ignore_ascii_case("bearer") && token.len() == 64).then(|| token.to_owned())
+}
+
 fn websocket_protocols(headers: &HeaderMap) -> Vec<&str> {
     headers
         .get(SEC_WEBSOCKET_PROTOCOL)
@@ -938,11 +1018,21 @@ fn lobby_store_error_response(error: LobbyStoreError) -> Response {
             "lobby-full",
             "Lobby has reached its participant limit",
         ),
+        LobbyStoreError::HostRequired => error_response(
+            StatusCode::FORBIDDEN,
+            "host-required",
+            "Only the lobby host can renew the lobby",
+        ),
         LobbyStoreError::InvalidCredentials => invalid_credentials_response(),
         LobbyStoreError::ParticipantNotFound => error_response(
             StatusCode::NOT_FOUND,
             "participant-not-found",
             "Participant is not available in this lobby",
+        ),
+        LobbyStoreError::RenewalLimitReached => error_response(
+            StatusCode::CONFLICT,
+            "renewal-limit-reached",
+            "Lobby renewal has reached its configured lifetime limit",
         ),
         LobbyStoreError::TargetNotConnected => error_response(
             StatusCode::CONFLICT,
@@ -1082,5 +1172,21 @@ mod tests {
         assert_eq!(default_lobby_participants(), 16);
         assert!((2..=MAX_LOBBY_PARTICIPANTS).contains(&16));
         assert!(!(2..=MAX_LOBBY_PARTICIPANTS).contains(&17));
+    }
+
+    #[test]
+    fn bearer_capability_requires_bearer_scheme_and_exact_token_length() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            format!("Bearer {}", "a".repeat(64)).parse().unwrap(),
+        );
+        assert_eq!(bearer_capability_token(&headers), Some("a".repeat(64)));
+
+        headers.insert(
+            AUTHORIZATION,
+            format!("Basic {}", "a".repeat(64)).parse().unwrap(),
+        );
+        assert_eq!(bearer_capability_token(&headers), None);
     }
 }
