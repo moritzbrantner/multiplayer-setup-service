@@ -108,9 +108,11 @@ impl RoomStore {
             let host_token_hash = hash_capability_token(&host_token);
 
             let mut inner = self.inner.lock().await;
-            purge_expired(&mut inner);
             if inner.rooms.len() >= self.max_rooms {
-                return Err(StoreError::Capacity);
+                purge_expired(&mut inner);
+                if inner.rooms.len() >= self.max_rooms {
+                    return Err(StoreError::Capacity);
+                }
             }
             if inner.rooms.contains_key(&room_id) {
                 continue;
@@ -146,7 +148,7 @@ impl RoomStore {
         let guest_token_hash = hash_capability_token(&guest_token);
 
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_room_if_expired(&mut inner, room_id);
         let room = inner
             .rooms
             .get_mut(room_id)
@@ -165,7 +167,7 @@ impl RoomStore {
 
     pub async fn status(&self, room_id: &str) -> Result<RoomStatus, StoreError> {
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_room_if_expired(&mut inner, room_id);
         let room = inner.rooms.get(room_id).ok_or(StoreError::RoomNotFound)?;
 
         Ok(RoomStatus {
@@ -186,7 +188,7 @@ impl RoomStore {
     ) -> Result<(), StoreError> {
         let token_hash = hash_capability_token(token);
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_room_if_expired(&mut inner, room_id);
         let room = inner.rooms.get(room_id).ok_or(StoreError::RoomNotFound)?;
         let expected = token_hash_for_role(room, role).ok_or(StoreError::InvalidCredentials)?;
 
@@ -206,7 +208,7 @@ impl RoomStore {
     ) -> Result<Registration, StoreError> {
         let token_hash = hash_capability_token(token);
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_room_if_expired(&mut inner, room_id);
         let room = inner
             .rooms
             .get_mut(room_id)
@@ -260,7 +262,7 @@ impl RoomStore {
 
     pub async fn peer_sender(&self, room_id: &str, role: PeerRole) -> Option<ConnectionSender> {
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_room_if_expired(&mut inner, room_id);
         let room = inner.rooms.get(room_id)?;
         connection_slot(room, role.other())
             .as_ref()
@@ -293,6 +295,17 @@ fn token_hash_for_role(room: &Room, role: PeerRole) -> Option<&[u8; 32]> {
     match role {
         PeerRole::Host => Some(&room.host_token_hash),
         PeerRole::Guest => room.guest_token_hash.as_ref(),
+    }
+}
+
+fn purge_room_if_expired(inner: &mut Inner, room_id: &str) {
+    let now = now_ms();
+    if inner
+        .rooms
+        .get(room_id)
+        .is_some_and(|room| room.expires_at <= now)
+    {
+        inner.rooms.remove(room_id);
     }
 }
 
