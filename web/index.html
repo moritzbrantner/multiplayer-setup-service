@@ -169,6 +169,7 @@
           </ul>
         </div>
       </div>
+      <p class="code-caption">Authenticated transport does not make gameplay payloads honest. The card and Pong demos below include deliberate bad-message probes so the game-level authority boundary is visible: forged state is rejected, while the documented host-trust limitation remains explicit.</p>
     </section>
 
     <section class="section" id="client-code">
@@ -185,7 +186,7 @@
     <section class="section" id="try">
       <div class="section-heading">
         <p class="eyebrow">Live browser clients</p>
-        <h2>Use the same foundation in three different ways.</h2>
+        <h2>Use the same foundation in four different ways.</h2>
         <p>The demos are static and can live on GitHub Pages. Hosting or joining a session requires a reachable signaling service; enter its base URL below and the links will carry it into each demo.</p>
       </div>
 
@@ -205,7 +206,11 @@
           </a>
           <a class="demo-link" data-demo-link="./pong.html" href="./pong.html">
             <strong>Pong</strong>
-            <span>Realtime updates plus a separate reliable score/reset path.</span>
+            <span>Host-authoritative physics with a deliberate forged-score probe.</span>
+          </a>
+          <a class="demo-link" data-demo-link="./card-game.html" href="./card-game.html">
+            <strong>Four-player card game</strong>
+            <span>Hidden hands, host-validated turn intents, forged-card and replay probes.</span>
           </a>
           <a class="demo-link" data-demo-link="./arena.html" href="./arena.html">
             <strong>2–16 player arena</strong>

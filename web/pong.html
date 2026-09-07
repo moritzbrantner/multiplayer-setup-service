@@ -9,11 +9,12 @@
     .score { display: flex; justify-content: center; gap: 36px; font-size: 1.4rem; font-weight: 700; margin: 8px 0 14px; }
     canvas { width: 100%; aspect-ratio: 16 / 9; display: block; background: #111; border-radius: 10px; touch-action: none; }
     .controls { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+    .security-probe { display: grid; gap: 8px; }
   </style>
 </head>
 <body>
   <main>
-    <nav><a href="./index.html">Demos</a><a href="./tic-tac-toe.html">Tic-Tac-Toe</a></nav>
+    <nav><a href="./index.html">Demos</a><a href="./tic-tac-toe.html">Tic-Tac-Toe</a><a href="./card-game.html">Card game</a></nav>
     <h1>Peer-to-peer Pong</h1>
     <section class="panel lobby" aria-label="Lobby controls">
       <button id="host" type="button">Host game</button>
@@ -31,6 +32,14 @@
         <span id="controlHint" class="muted">Connect two peers to start.</span>
         <button id="reset" type="button" disabled>Reset score</button>
       </div>
+    </section>
+
+    <section class="panel security-probe" aria-labelledby="security-heading">
+      <h2 id="security-heading">Authority probe</h2>
+      <p>The guest is allowed to request paddle movement. The host computes paddle speed, ball physics, collisions, and score. A modified guest therefore must not be able to publish a score directly.</p>
+      <button id="forgeScore" type="button" disabled>Guest: attempt forged 99–0 score</button>
+      <p id="securityStatus" class="muted" aria-live="polite">Connect two peers to run the probe.</p>
+      <p class="muted">This blocks impossible state messages and paddle teleporting. It cannot reliably distinguish a human from a bot that sends only legal paddle inputs, and a malicious host can still cheat because this demo intentionally trusts the host as gameplay authority.</p>
     </section>
     <script type="module" src="./pong.js"></script>
   </main>
