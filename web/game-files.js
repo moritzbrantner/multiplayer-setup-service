@@ -1,5 +1,5 @@
 import { ContentTransfer } from "./content-transfer.js";
-import { manifestFile, validateTrustedManifest } from "./content-verification.js";
+import { manifestFile, validateTrustedManifest, verifyContent } from "./content-verification.js";
 
 export const GAME_FILE_PROTOCOL = "multiplayer-game-file-v1";
 
@@ -93,6 +93,7 @@ export class GameFiles extends EventTarget {
     manifest,
     transfer = null,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    incomingRequestTimeoutMs = requestTimeoutMs,
     maxPendingRequests = DEFAULT_MAX_PENDING_REQUESTS,
   } = {}) {
     super();
@@ -107,11 +108,13 @@ export class GameFiles extends EventTarget {
     }
     validateTrustedManifest(manifest);
     requireTimeout(requestTimeoutMs);
+    requireTimeout(incomingRequestTimeoutMs);
     requireMaxPending(maxPendingRequests);
 
     this.session = session;
     this.manifest = manifest;
     this.requestTimeoutMs = requestTimeoutMs;
+    this.incomingRequestTimeoutMs = incomingRequestTimeoutMs;
     this.maxPendingRequests = maxPendingRequests;
     this.providers = new Map();
     this.pending = new Map();
@@ -121,13 +124,23 @@ export class GameFiles extends EventTarget {
     this.transfer = transfer ?? new ContentTransfer({ session, manifest });
 
     this.onReliable = (event) => this.#handleReliable(event.detail?.peerId, event.detail?.data);
+    this.onParticipantDisconnected = (event) => this.#handleParticipantDisconnected(event.detail?.participantId);
     this.onStarted = (event) => this.#handleStarted(event.detail);
-    this.onFile = (event) => this.#handleFile(event.detail);
+    this.onFile = (event) => {
+      this.#handleFile(event.detail).catch((error) => {
+        this.#emit("error", {
+          peerId: event.detail?.peerId,
+          requestId: event.detail?.requestId,
+          error,
+        });
+      });
+    };
     this.onProgress = (event) => this.#handleProgress(event.detail);
     this.onTransferFailed = (event) => this.#handleTransferFailed(event.detail);
     this.onTransferError = (event) => this.#emit("error", event.detail ?? {});
 
     session.addEventListener("reliable", this.onReliable);
+    session.addEventListener("participant-disconnected", this.onParticipantDisconnected);
     this.transfer.addEventListener("started", this.onStarted);
     this.transfer.addEventListener("file", this.onFile);
     this.transfer.addEventListener("progress", this.onProgress);
@@ -194,6 +207,8 @@ export class GameFiles extends EventTarget {
     this.#assertOpen();
     const active = this.#requireIncomingRequest(request);
     if (active.state !== "waiting") throw new Error("File request is already being handled");
+    clearTimeout(active.timeout);
+    active.timeout = null;
     active.state = "sending";
 
     try {
@@ -222,6 +237,8 @@ export class GameFiles extends EventTarget {
     const active = this.#requireIncomingRequest(request);
     if (active.state !== "waiting") throw new Error("File request is already being handled");
     const rejectionReason = requireReason(reason);
+    clearTimeout(active.timeout);
+    active.timeout = null;
     this.incoming.delete(requestKey(active.peerId, active.requestId));
     this.#sendReject(active.peerId, active.requestId, active.path, rejectionReason);
   }
@@ -230,6 +247,7 @@ export class GameFiles extends EventTarget {
     if (this.closed) return;
     this.closed = true;
     this.session.removeEventListener("reliable", this.onReliable);
+    this.session.removeEventListener("participant-disconnected", this.onParticipantDisconnected);
     this.transfer.removeEventListener("started", this.onStarted);
     this.transfer.removeEventListener("file", this.onFile);
     this.transfer.removeEventListener("progress", this.onProgress);
@@ -242,6 +260,7 @@ export class GameFiles extends EventTarget {
       pending.reject(new Error("GameFiles is closed"));
     }
     this.pending.clear();
+    for (const request of this.incoming.values()) clearTimeout(request.timeout);
     this.incoming.clear();
     this.providers.clear();
   }
@@ -303,8 +322,10 @@ export class GameFiles extends EventTarget {
       requestId: message.id,
       path: message.path,
       state: "waiting",
+      timeout: null,
     };
     this.incoming.set(key, request);
+    this.#armIncomingTimeout(request);
 
     const provider = this.providers.get(request.path);
     if (!provider) {
@@ -319,6 +340,8 @@ export class GameFiles extends EventTarget {
     Promise.resolve()
       .then(() => provider({ peerId: request.peerId, requestId: request.requestId, path: request.path }))
       .then((value) => {
+        const current = this.incoming.get(key);
+        if (current !== request || current.state !== "waiting") return;
         if (value == null) {
           this.rejectRequest(request, "unavailable");
           return;
@@ -327,7 +350,8 @@ export class GameFiles extends EventTarget {
       })
       .catch((error) => {
         const current = this.incoming.get(key);
-        if (current?.state === "waiting") {
+        if (current !== request) return;
+        if (current.state === "waiting") {
           try {
             this.rejectRequest(current, "provider-failed");
           } catch {
@@ -354,13 +378,29 @@ export class GameFiles extends EventTarget {
     pending.reject(new FileRequestRejectedError(pending.path, message.reason));
   }
 
+  #handleParticipantDisconnected(peerId) {
+    if (typeof peerId !== "string" || peerId === "") return;
+
+    for (const pending of [...this.pending.values()]) {
+      if (pending.peerId !== peerId) continue;
+      clearTimeout(pending.timeout);
+      this.pending.delete(pending.requestId);
+      pending.reject(new Error(`Peer ${peerId} disconnected during file request`));
+    }
+    for (const [key, request] of [...this.incoming.entries()]) {
+      if (request.peerId !== peerId) continue;
+      clearTimeout(request.timeout);
+      this.incoming.delete(key);
+    }
+  }
+
   #handleStarted(detail) {
     const pending = this.#matchingPending(detail);
     if (!pending) return;
     this.#armPendingTimeout(pending);
   }
 
-  #handleFile(detail) {
+  async #handleFile(detail) {
     const requestId = detail?.requestId;
     if (!requestId || !this.pending.has(requestId)) return;
     const pending = this.pending.get(requestId);
@@ -374,6 +414,18 @@ export class GameFiles extends EventTarget {
     }
 
     clearTimeout(pending.timeout);
+    pending.timeout = null;
+    try {
+      await verifyContent(this.manifest, pending.path, detail.bytes);
+    } catch (error) {
+      if (this.pending.get(requestId) === pending) {
+        this.pending.delete(requestId);
+        pending.reject(error);
+      }
+      return;
+    }
+    if (this.pending.get(requestId) !== pending) return;
+
     this.pending.delete(requestId);
     this.#emit("file", { ...detail, requestId });
     pending.resolve(detail.bytes);
@@ -409,6 +461,25 @@ export class GameFiles extends EventTarget {
       this.pending.delete(pending.requestId);
       pending.reject(new Error(`File request timed out for ${pending.path}`));
     }, pending.timeoutMs);
+  }
+
+  #armIncomingTimeout(request) {
+    clearTimeout(request.timeout);
+    request.timeout = setTimeout(() => {
+      const key = requestKey(request.peerId, request.requestId);
+      if (this.incoming.get(key) !== request || request.state !== "waiting") return;
+      this.incoming.delete(key);
+      try {
+        this.#sendReject(request.peerId, request.requestId, request.path, "request-timeout");
+      } catch (error) {
+        this.#emit("error", {
+          peerId: request.peerId,
+          requestId: request.requestId,
+          path: request.path,
+          error,
+        });
+      }
+    }, this.incomingRequestTimeoutMs);
   }
 
   #requireIncomingRequest(request) {
