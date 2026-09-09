@@ -263,3 +263,20 @@ test("file requests refuse paths outside the trusted manifest before sending any
   assert.equal(guest.reliableSent.length, 0);
   files.close();
 });
+
+test("file requests preserve ContentTransfer's one-active-transfer-per-peer bound", async () => {
+  const { host, guest } = linkedPair();
+  const trusted = manifest();
+  const hostFiles = new GameFiles({ session: host, manifest: trusted });
+  const guestFiles = new GameFiles({ session: guest, manifest: trusted, requestTimeoutMs: 20 });
+
+  const first = guestFiles.requestFile("HOST0001", "assets/greeting.bin");
+  assert.throws(
+    () => guestFiles.requestFile("HOST0001", "assets/greeting.bin"),
+    /already has a pending file request/,
+  );
+  await assert.rejects(first, /File request timed out/);
+
+  hostFiles.close();
+  guestFiles.close();
+});
