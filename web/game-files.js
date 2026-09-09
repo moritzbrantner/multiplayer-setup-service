@@ -121,13 +121,17 @@ export class GameFiles extends EventTarget {
     this.transfer = transfer ?? new ContentTransfer({ session, manifest });
 
     this.onReliable = (event) => this.#handleReliable(event.detail?.peerId, event.detail?.data);
+    this.onStarted = (event) => this.#handleStarted(event.detail);
     this.onFile = (event) => this.#handleFile(event.detail);
     this.onProgress = (event) => this.#handleProgress(event.detail);
+    this.onTransferFailed = (event) => this.#handleTransferFailed(event.detail);
     this.onTransferError = (event) => this.#emit("error", event.detail ?? {});
 
     session.addEventListener("reliable", this.onReliable);
+    this.transfer.addEventListener("started", this.onStarted);
     this.transfer.addEventListener("file", this.onFile);
     this.transfer.addEventListener("progress", this.onProgress);
+    this.transfer.addEventListener("failed", this.onTransferFailed);
     this.transfer.addEventListener("error", this.onTransferError);
   }
 
@@ -161,19 +165,17 @@ export class GameFiles extends EventTarget {
 
     const requestId = randomRequestId(new Set(this.pending.keys()));
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pending.delete(requestId);
-        reject(new Error(`File request timed out for ${path}`));
-      }, timeoutMs);
-
-      this.pending.set(requestId, {
+      const pending = {
         requestId,
         peerId: remotePeerId,
         path,
-        timeout,
+        timeout: null,
+        timeoutMs,
         resolve,
         reject,
-      });
+      };
+      this.pending.set(requestId, pending);
+      this.#armPendingTimeout(pending);
 
       try {
         this.session.sendReliable(
@@ -181,7 +183,7 @@ export class GameFiles extends EventTarget {
           controlMessage("request", { id: requestId, path }),
         );
       } catch (error) {
-        clearTimeout(timeout);
+        clearTimeout(pending.timeout);
         this.pending.delete(requestId);
         reject(error);
       }
@@ -228,8 +230,10 @@ export class GameFiles extends EventTarget {
     if (this.closed) return;
     this.closed = true;
     this.session.removeEventListener("reliable", this.onReliable);
+    this.transfer.removeEventListener("started", this.onStarted);
     this.transfer.removeEventListener("file", this.onFile);
     this.transfer.removeEventListener("progress", this.onProgress);
+    this.transfer.removeEventListener("failed", this.onTransferFailed);
     this.transfer.removeEventListener("error", this.onTransferError);
     if (this.ownsTransfer) this.transfer.close();
 
@@ -350,6 +354,12 @@ export class GameFiles extends EventTarget {
     pending.reject(new FileRequestRejectedError(pending.path, message.reason));
   }
 
+  #handleStarted(detail) {
+    const pending = this.#matchingPending(detail);
+    if (!pending) return;
+    this.#armPendingTimeout(pending);
+  }
+
   #handleFile(detail) {
     const requestId = detail?.requestId;
     if (!requestId || !this.pending.has(requestId)) return;
@@ -370,11 +380,35 @@ export class GameFiles extends EventTarget {
   }
 
   #handleProgress(detail) {
+    const pending = this.#matchingPending(detail);
+    if (!pending) return;
+    this.#armPendingTimeout(pending);
+    this.#emit("progress", { ...detail, requestId: pending.requestId });
+  }
+
+  #handleTransferFailed(detail) {
+    const pending = this.#matchingPending(detail);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    this.pending.delete(pending.requestId);
+    pending.reject(detail?.error instanceof Error ? detail.error : new Error(`File transfer failed for ${pending.path}`));
+  }
+
+  #matchingPending(detail) {
     const requestId = detail?.requestId;
-    if (!requestId || !this.pending.has(requestId)) return;
+    if (!requestId || !this.pending.has(requestId)) return null;
     const pending = this.pending.get(requestId);
-    if (pending.peerId !== detail.peerId || pending.path !== detail.path) return;
-    this.#emit("progress", { ...detail, requestId });
+    if (pending.peerId !== detail.peerId || pending.path !== detail.path) return null;
+    return pending;
+  }
+
+  #armPendingTimeout(pending) {
+    clearTimeout(pending.timeout);
+    pending.timeout = setTimeout(() => {
+      if (this.pending.get(pending.requestId) !== pending) return;
+      this.pending.delete(pending.requestId);
+      pending.reject(new Error(`File request timed out for ${pending.path}`));
+    }, pending.timeoutMs);
   }
 
   #requireIncomingRequest(request) {

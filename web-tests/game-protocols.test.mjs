@@ -51,6 +51,14 @@ function cloneBinary(value) {
   return value;
 }
 
+class ManualTransfer extends EventTarget {
+  close() {}
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 class LinkedSession extends EventTarget {
   constructor(participantId, hostParticipantId = "HOST0001") {
     super();
@@ -276,6 +284,84 @@ test("file requests preserve ContentTransfer's one-active-transfer-per-peer boun
     /already has a pending file request/,
   );
   await assert.rejects(first, /File request timed out/);
+
+  hostFiles.close();
+  guestFiles.close();
+});
+
+
+test("file request timeout measures inactivity so healthy long transfers can keep making progress", async () => {
+  const { guest } = linkedPair();
+  const transfer = new ManualTransfer();
+  const files = new GameFiles({
+    session: guest,
+    manifest: manifest(),
+    transfer,
+    requestTimeoutMs: 50,
+  });
+
+  const requested = files.requestFile("HOST0001", "assets/greeting.bin");
+  const requestId = guest.reliableSent.at(-1).data.id;
+
+  await delay(30);
+  transfer.dispatchEvent(
+    new CustomEvent("started", {
+      detail: { peerId: "HOST0001", path: "assets/greeting.bin", requestId },
+    }),
+  );
+  await delay(30);
+  transfer.dispatchEvent(
+    new CustomEvent("progress", {
+      detail: {
+        peerId: "HOST0001",
+        path: "assets/greeting.bin",
+        requestId,
+        receivedChunks: 1,
+        totalChunks: 3,
+      },
+    }),
+  );
+  await delay(30);
+  transfer.dispatchEvent(
+    new CustomEvent("file", {
+      detail: {
+        peerId: "HOST0001",
+        path: "assets/greeting.bin",
+        requestId,
+        bytes: bytes("hello world"),
+      },
+    }),
+  );
+
+  assert.equal(new TextDecoder().decode(await requested), "hello world");
+  files.close();
+});
+
+test("verified transfer failures reject the correlated high-level file request immediately", async () => {
+  const { host, guest } = linkedPair();
+  const trusted = manifest();
+  const originalSendContent = host.sendContent.bind(host);
+  let binaryChunks = 0;
+  host.sendContent = async (peerId, data) => {
+    if (data instanceof ArrayBuffer) {
+      binaryChunks += 1;
+      if (binaryChunks === 2) {
+        const corrupted = new Uint8Array(data.slice(0));
+        corrupted[corrupted.length - 1] ^= 0xff;
+        return originalSendContent(peerId, corrupted.buffer);
+      }
+    }
+    return originalSendContent(peerId, data);
+  };
+
+  const hostFiles = new GameFiles({ session: host, manifest: trusted });
+  const guestFiles = new GameFiles({ session: guest, manifest: trusted, requestTimeoutMs: 1_000 });
+  hostFiles.provide("assets/greeting.bin", () => bytes("hello world"));
+
+  await assert.rejects(
+    guestFiles.requestFile("HOST0001", "assets/greeting.bin"),
+    /Chunk hash mismatch/,
+  );
 
   hostFiles.close();
   guestFiles.close();
