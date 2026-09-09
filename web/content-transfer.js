@@ -12,6 +12,8 @@ const CHUNK_FRAME_MAGIC = 0x4d504331;
 const CHUNK_FRAME_HEADER_BYTES = 12;
 const MAX_CONTROL_MESSAGE_BYTES = 8 * 1024;
 const DEFAULT_MAX_TRANSFER_BYTES = 64 * 1024 * 1024;
+const MAX_REQUEST_ID_LENGTH = 64;
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -31,6 +33,19 @@ async function toBytes(value) {
 
 function validTransferId(value) {
   return Number.isInteger(value) && value > 0 && value <= 0xffff_ffff;
+}
+
+function optionalRequestId(value) {
+  if (value == null) return null;
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > MAX_REQUEST_ID_LENGTH ||
+    !REQUEST_ID_PATTERN.test(value)
+  ) {
+    throw new Error("Invalid content transfer request id");
+  }
+  return value;
 }
 
 function transferKey(peerId, transferId) {
@@ -124,8 +139,9 @@ export class ContentTransfer extends EventTarget {
     session.addEventListener("content", this.onContent);
   }
 
-  async sendFile(peerId, path, value) {
+  async sendFile(peerId, path, value, { requestId = null } = {}) {
     if (this.closed) throw new Error("ContentTransfer is closed");
+    const normalizedRequestId = optionalRequestId(requestId);
     const file = manifestFile(this.manifest, path);
     requireTransferableFile(file, this.maxTransferBytes);
     const bytes = await toBytes(value);
@@ -145,6 +161,7 @@ export class ContentTransfer extends EventTarget {
           sha256: file.sha256,
           chunkBytes: file.chunks.bytes,
           chunks: file.chunks.sha256.length,
+          ...(normalizedRequestId ? { requestId: normalizedRequestId } : {}),
         }),
       );
 
@@ -165,6 +182,7 @@ export class ContentTransfer extends EventTarget {
         peerId,
         path,
         transferId,
+        requestId: normalizedRequestId,
         bytes: file.bytes,
         chunks: file.chunks.sha256.length,
       });
@@ -206,6 +224,7 @@ export class ContentTransfer extends EventTarget {
   #startIncoming(peerId, message) {
     if (!validTransferId(message.id)) throw new Error("Invalid content transfer id");
     if (typeof message.path !== "string") throw new Error("Content transfer path is required");
+    const requestId = optionalRequestId(message.requestId);
     const file = manifestFile(this.manifest, message.path);
     requireTransferableFile(file, this.maxTransferBytes);
 
@@ -228,6 +247,7 @@ export class ContentTransfer extends EventTarget {
     this.incoming.set(key, {
       peerId,
       transferId: message.id,
+      requestId,
       file,
       chunks: new Array(file.chunks.sha256.length),
       receivedChunks: 0,
@@ -236,6 +256,7 @@ export class ContentTransfer extends EventTarget {
       peerId,
       path: file.path,
       transferId: message.id,
+      requestId,
       bytes: file.bytes,
       chunks: file.chunks.sha256.length,
     });
@@ -269,6 +290,7 @@ export class ContentTransfer extends EventTarget {
       peerId,
       path: transfer.file.path,
       transferId: transfer.transferId,
+      requestId: transfer.requestId,
       receivedChunks: transfer.receivedChunks,
       totalChunks: transfer.chunks.length,
     });
@@ -296,6 +318,7 @@ export class ContentTransfer extends EventTarget {
       peerId,
       path: transfer.file.path,
       transferId: transfer.transferId,
+      requestId: transfer.requestId,
       bytes,
       verification,
     });
