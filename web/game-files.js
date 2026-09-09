@@ -149,6 +149,9 @@ export class GameFiles extends EventTarget {
     if (this.pending.size >= this.maxPendingRequests) {
       throw new Error("Too many pending file requests");
     }
+    if ([...this.pending.values()].some((pending) => pending.peerId === remotePeerId)) {
+      throw new Error(`Peer ${remotePeerId} already has a pending file request`);
+    }
     if (
       typeof this.session.contentPeerIds === "function" &&
       !this.session.contentPeerIds().includes(remotePeerId)
@@ -251,11 +254,15 @@ export class GameFiles extends EventTarget {
     }
     if (!message) return;
 
-    if (message.type === "request") {
-      this.#receiveRequest(peerId, message);
-      return;
+    try {
+      if (message.type === "request") {
+        this.#receiveRequest(peerId, message);
+        return;
+      }
+      this.#receiveRejection(peerId, message);
+    } catch (error) {
+      this.#emit("error", { peerId, error });
     }
-    this.#receiveRejection(peerId, message);
   }
 
   #receiveRequest(peerId, message) {
@@ -266,12 +273,23 @@ export class GameFiles extends EventTarget {
       return;
     }
 
+    if (
+      typeof this.session.contentPeerIds === "function" &&
+      !this.session.contentPeerIds().includes(peerId)
+    ) {
+      this.#sendReject(peerId, message.id, message.path, "content-not-ready");
+      return;
+    }
+
     const key = requestKey(peerId, message.id);
     if (this.incoming.has(key)) {
       this.#sendReject(peerId, message.id, message.path, "duplicate-request");
       return;
     }
-    if (this.incoming.size >= this.maxPendingRequests) {
+    if (
+      this.incoming.size >= this.maxPendingRequests ||
+      [...this.incoming.values()].some((request) => request.peerId === peerId)
+    ) {
       this.#sendReject(peerId, message.id, message.path, "busy");
       return;
     }
