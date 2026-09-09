@@ -12,6 +12,8 @@ const CHUNK_FRAME_MAGIC = 0x4d504331;
 const CHUNK_FRAME_HEADER_BYTES = 12;
 const MAX_CONTROL_MESSAGE_BYTES = 8 * 1024;
 const DEFAULT_MAX_TRANSFER_BYTES = 64 * 1024 * 1024;
+const MAX_REQUEST_ID_LENGTH = 64;
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -31,6 +33,19 @@ async function toBytes(value) {
 
 function validTransferId(value) {
   return Number.isInteger(value) && value > 0 && value <= 0xffff_ffff;
+}
+
+function optionalRequestId(value) {
+  if (value == null) return null;
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > MAX_REQUEST_ID_LENGTH ||
+    !REQUEST_ID_PATTERN.test(value)
+  ) {
+    throw new Error("Invalid content transfer request id");
+  }
+  return value;
 }
 
 function transferKey(peerId, transferId) {
@@ -124,8 +139,9 @@ export class ContentTransfer extends EventTarget {
     session.addEventListener("content", this.onContent);
   }
 
-  async sendFile(peerId, path, value) {
+  async sendFile(peerId, path, value, { requestId = null } = {}) {
     if (this.closed) throw new Error("ContentTransfer is closed");
+    const normalizedRequestId = optionalRequestId(requestId);
     const file = manifestFile(this.manifest, path);
     requireTransferableFile(file, this.maxTransferBytes);
     const bytes = await toBytes(value);
@@ -145,6 +161,7 @@ export class ContentTransfer extends EventTarget {
           sha256: file.sha256,
           chunkBytes: file.chunks.bytes,
           chunks: file.chunks.sha256.length,
+          ...(normalizedRequestId ? { requestId: normalizedRequestId } : {}),
         }),
       );
 
@@ -165,6 +182,7 @@ export class ContentTransfer extends EventTarget {
         peerId,
         path,
         transferId,
+        requestId: normalizedRequestId,
         bytes: file.bytes,
         chunks: file.chunks.sha256.length,
       });
@@ -206,39 +224,54 @@ export class ContentTransfer extends EventTarget {
   #startIncoming(peerId, message) {
     if (!validTransferId(message.id)) throw new Error("Invalid content transfer id");
     if (typeof message.path !== "string") throw new Error("Content transfer path is required");
-    const file = manifestFile(this.manifest, message.path);
-    requireTransferableFile(file, this.maxTransferBytes);
+    const requestId = optionalRequestId(message.requestId);
 
-    if (
-      message.bytes !== file.bytes ||
-      message.sha256 !== file.sha256 ||
-      message.chunkBytes !== file.chunks.bytes ||
-      message.chunks !== file.chunks.sha256.length
-    ) {
-      throw new Error(`Peer transfer metadata does not match the trusted manifest for ${message.path}`);
-    }
-    for (const transfer of this.incoming.values()) {
-      if (transfer.peerId === peerId) {
-        throw new Error(`Peer ${peerId} already has an active content transfer`);
+    try {
+      const file = manifestFile(this.manifest, message.path);
+      requireTransferableFile(file, this.maxTransferBytes);
+
+      if (
+        message.bytes !== file.bytes ||
+        message.sha256 !== file.sha256 ||
+        message.chunkBytes !== file.chunks.bytes ||
+        message.chunks !== file.chunks.sha256.length
+      ) {
+        throw new Error(`Peer transfer metadata does not match the trusted manifest for ${message.path}`);
       }
-    }
+      for (const transfer of this.incoming.values()) {
+        if (transfer.peerId === peerId) {
+          throw new Error(`Peer ${peerId} already has an active content transfer`);
+        }
+      }
 
-    const key = transferKey(peerId, message.id);
-    if (this.incoming.has(key)) throw new Error("Duplicate content transfer id");
-    this.incoming.set(key, {
-      peerId,
-      transferId: message.id,
-      file,
-      chunks: new Array(file.chunks.sha256.length),
-      receivedChunks: 0,
-    });
-    this.#emit("started", {
-      peerId,
-      path: file.path,
-      transferId: message.id,
-      bytes: file.bytes,
-      chunks: file.chunks.sha256.length,
-    });
+      const key = transferKey(peerId, message.id);
+      if (this.incoming.has(key)) throw new Error("Duplicate content transfer id");
+      this.incoming.set(key, {
+        peerId,
+        transferId: message.id,
+        requestId,
+        file,
+        chunks: new Array(file.chunks.sha256.length),
+        receivedChunks: 0,
+      });
+      this.#emit("started", {
+        peerId,
+        path: file.path,
+        transferId: message.id,
+        requestId,
+        bytes: file.bytes,
+        chunks: file.chunks.sha256.length,
+      });
+    } catch (error) {
+      this.#emitTransferFailure({
+        peerId,
+        path: message.path,
+        transferId: message.id,
+        requestId,
+        error,
+      });
+      throw error;
+    }
   }
 
   async #acceptChunk(peerId, data) {
@@ -248,7 +281,9 @@ export class ContentTransfer extends EventTarget {
     if (!transfer) throw new Error("Content chunk does not belong to an active transfer");
     if (transfer.chunks[frame.chunkIndex]) {
       this.incoming.delete(key);
-      throw new Error(`Duplicate content chunk ${frame.chunkIndex}`);
+      const error = new Error(`Duplicate content chunk ${frame.chunkIndex}`);
+      this.#emitTransferFailure({ ...transfer, error });
+      throw error;
     }
 
     try {
@@ -260,6 +295,7 @@ export class ContentTransfer extends EventTarget {
       );
     } catch (error) {
       this.incoming.delete(key);
+      this.#emitTransferFailure({ ...transfer, error });
       throw error;
     }
 
@@ -269,6 +305,7 @@ export class ContentTransfer extends EventTarget {
       peerId,
       path: transfer.file.path,
       transferId: transfer.transferId,
+      requestId: transfer.requestId,
       receivedChunks: transfer.receivedChunks,
       totalChunks: transfer.chunks.length,
     });
@@ -281,23 +318,39 @@ export class ContentTransfer extends EventTarget {
     if (!transfer) throw new Error("Content completion does not belong to an active transfer");
     this.incoming.delete(key);
 
-    if (transfer.receivedChunks !== transfer.chunks.length || transfer.chunks.some((chunk) => !chunk)) {
-      throw new Error(`Content transfer completed before all chunks arrived for ${transfer.file.path}`);
-    }
+    try {
+      if (transfer.receivedChunks !== transfer.chunks.length || transfer.chunks.some((chunk) => !chunk)) {
+        throw new Error(`Content transfer completed before all chunks arrived for ${transfer.file.path}`);
+      }
 
-    const bytes = new Uint8Array(transfer.file.bytes);
-    let offset = 0;
-    for (const chunk of transfer.chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
+      const bytes = new Uint8Array(transfer.file.bytes);
+      let offset = 0;
+      for (const chunk of transfer.chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      const verification = await verifyContent(this.manifest, transfer.file.path, bytes);
+      this.#emit("file", {
+        peerId,
+        path: transfer.file.path,
+        transferId: transfer.transferId,
+        requestId: transfer.requestId,
+        bytes,
+        verification,
+      });
+    } catch (error) {
+      this.#emitTransferFailure({ ...transfer, error });
+      throw error;
     }
-    const verification = await verifyContent(this.manifest, transfer.file.path, bytes);
-    this.#emit("file", {
+  }
+
+  #emitTransferFailure({ peerId, file, path, transferId, requestId, error }) {
+    this.#emit("failed", {
       peerId,
-      path: transfer.file.path,
-      transferId: transfer.transferId,
-      bytes,
-      verification,
+      path: file?.path ?? path,
+      transferId,
+      requestId,
+      error,
     });
   }
 
