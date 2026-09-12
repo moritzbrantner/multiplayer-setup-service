@@ -25,9 +25,13 @@ pub enum LobbyConnectionCommand {
 impl outbox::Command for LobbyConnectionCommand {
     fn into_text(self) -> Option<String> {
         match self {
-            Self::Send(message) => {
-                Some(serde_json::to_string(&message).expect("lobby message should serialize"))
-            }
+            Self::Send(message) => match serde_json::to_string(&message) {
+                Ok(text) => Some(text),
+                Err(error) => {
+                    tracing::error!(%error, "failed to serialize lobby message");
+                    None
+                }
+            },
             Self::Close => None,
         }
     }
@@ -192,8 +196,7 @@ impl LobbyStore {
                 },
             );
 
-            let display_code =
-                format_room_code(&lobby_id).expect("generated lobby ID should always format");
+            let display_code = format_room_code(&lobby_id).ok_or(LobbyStoreError::Randomness)?;
 
             return Ok(CreatedLobby {
                 lobby_id,
@@ -497,13 +500,10 @@ fn duration_ms(duration: Duration) -> u64 {
 }
 
 fn now_ms() -> u64 {
-    u64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock must be after the Unix epoch")
-            .as_millis(),
-    )
-    .unwrap_or(u64::MAX)
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+        Err(_) => 0,
+    }
 }
 
 #[cfg(test)]

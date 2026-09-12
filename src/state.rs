@@ -27,9 +27,13 @@ pub enum ConnectionCommand {
 impl outbox::Command for ConnectionCommand {
     fn into_text(self) -> Option<String> {
         match self {
-            Self::Send(message) => {
-                Some(serde_json::to_string(&message).expect("server message should serialize"))
-            }
+            Self::Send(message) => match serde_json::to_string(&message) {
+                Ok(text) => Some(text),
+                Err(error) => {
+                    tracing::error!(%error, "failed to serialize server message");
+                    None
+                }
+            },
             Self::Close => None,
         }
     }
@@ -143,8 +147,8 @@ impl RoomStore {
                 },
             );
 
-            let display_code = crate::protocol::format_room_code(&room_id)
-                .expect("generated room ID should always format");
+            let display_code =
+                crate::protocol::format_room_code(&room_id).ok_or(StoreError::Randomness)?;
 
             return Ok(CreatedRoom {
                 room_id,
@@ -333,13 +337,10 @@ fn duration_ms(duration: Duration) -> u64 {
 }
 
 fn now_ms() -> u64 {
-    u64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock must be after the Unix epoch")
-            .as_millis(),
-    )
-    .unwrap_or(u64::MAX)
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+        Err(_) => 0,
+    }
 }
 
 #[cfg(test)]
