@@ -357,7 +357,10 @@ mod tests {
 
     #[test]
     fn pre_epoch_clock_uses_fail_closed_sentinel() {
-        assert_eq!(system_time_ms(UNIX_EPOCH - Duration::from_secs(1)), u64::MAX);
+        assert_eq!(
+            system_time_ms(UNIX_EPOCH - Duration::from_secs(1)),
+            u64::MAX
+        );
     }
 
     #[tokio::test]
