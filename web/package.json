@@ -5,6 +5,6 @@
   "scripts": {
     "test": "node --test ../web-tests/*.test.mjs",
     "test:perf": "node --test ../web-tests/*.perf.mjs",
-    "check": "npm run test && npm run test:perf"
+    "check": "bun run test && bun run test:perf"
   }
 }
