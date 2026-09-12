@@ -320,11 +320,29 @@ async fn relay_signal(
         )
         .await
         .is_ok(),
-        Err(_) => send_server(
+        Err(outbox::SendError::Full) => send_server(
             socket,
             &ServerMessage::Error {
                 code: "peer-overloaded",
-                message: "The recipient exceeded signaling delivery capacity and was disconnected",
+                message: "The recipient exceeded its signaling queue capacity and was disconnected",
+            },
+        )
+        .await
+        .is_ok(),
+        Err(outbox::SendError::BudgetExhausted) => send_server(
+            socket,
+            &ServerMessage::Error {
+                code: "signaling-capacity-exhausted",
+                message: "Service signaling relay capacity is temporarily exhausted; the peer remains connected",
+            },
+        )
+        .await
+        .is_ok(),
+        Err(outbox::SendError::TooLarge) => send_server(
+            socket,
+            &ServerMessage::Error {
+                code: "signaling-envelope-too-large",
+                message: "The relayed signaling envelope exceeds the server delivery limit",
             },
         )
         .await
@@ -360,11 +378,29 @@ async fn relay_lobby_signal(
                 )
                 .await
                 .is_ok(),
-                Err(_) => send_lobby_server(
+                Err(outbox::SendError::Full) => send_lobby_server(
                     socket,
                     &LobbyServerMessage::Error {
                         code: "participant-overloaded",
-                        message: "The recipient exceeded signaling delivery capacity and was disconnected",
+                        message: "The recipient exceeded its signaling queue capacity and was disconnected",
+                    },
+                )
+                .await
+                .is_ok(),
+                Err(outbox::SendError::BudgetExhausted) => send_lobby_server(
+                    socket,
+                    &LobbyServerMessage::Error {
+                        code: "signaling-capacity-exhausted",
+                        message: "Service signaling relay capacity is temporarily exhausted; the participant remains connected",
+                    },
+                )
+                .await
+                .is_ok(),
+                Err(outbox::SendError::TooLarge) => send_lobby_server(
+                    socket,
+                    &LobbyServerMessage::Error {
+                        code: "signaling-envelope-too-large",
+                        message: "The relayed signaling envelope exceeds the server delivery limit",
                     },
                 )
                 .await
