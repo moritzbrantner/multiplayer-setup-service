@@ -59,7 +59,12 @@ fn demo_lobbies_share_invites_chat_and_latency_telemetry() {
     for script in ["pong.js", "tic-tac-toe.js", "card-game.js", "arena.js"] {
         assert!(web_file(script).contains("./lobby-experience.js"));
     }
-    for page in ["pong.html", "tic-tac-toe.html", "card-game.html", "arena.html"] {
+    for page in [
+        "pong.html",
+        "tic-tac-toe.html",
+        "card-game.html",
+        "arena.html",
+    ] {
         let source = web_file(page);
         assert!(source.contains("data-lobby-chat-form"));
         assert!(source.contains("data-lobby-share"));
