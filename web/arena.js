@@ -1,3 +1,4 @@
+import { LobbyExperience, readInviteJoin } from "./lobby-experience.js";
 import { LobbySession } from "./lobby-session.js";
 import {
   applySnapshotEntry,
@@ -11,13 +12,13 @@ import {
 
 const params = new URLSearchParams(window.location.search);
 const apiBase = params.get("api") || "http://127.0.0.1:8787";
+const inviteJoin = readInviteJoin({ search: window.location.search, codeParam: "lobby" });
 const topologySelect = document.querySelector("#topology");
 const maxParticipantsSelect = document.querySelector("#max-participants");
 const hostButton = document.querySelector("#host");
 const joinButton = document.querySelector("#join");
 const codeInput = document.querySelector("#code");
 const status = document.querySelector("#status");
-const invite = document.querySelector("#invite");
 const game = document.querySelector("#game");
 const arena = document.querySelector("#arena");
 const selfId = document.querySelector("#self-id");
@@ -25,12 +26,12 @@ const participantCount = document.querySelector("#participant-count");
 const peerCount = document.querySelector("#peer-count");
 const edgeCount = document.querySelector("#edge-count");
 
-const queryLobby = params.get("lobby");
 const queryTopology = params.get("topology");
-if (queryLobby) codeInput.value = queryLobby;
+if (inviteJoin.code) codeInput.value = inviteJoin.code;
 if (queryTopology === "mesh" || queryTopology === "host") topologySelect.value = queryTopology;
 
 let session = null;
+let lobbyExperience = null;
 let localSequence = 0;
 const players = new Map();
 const lastSequence = new Map();
@@ -197,11 +198,6 @@ function wireSession(current) {
   current.addEventListener("lobby", () => {
     status.textContent = `Lobby ${current.displayCode}; connecting peers…`;
     codeInput.value = current.displayCode;
-    const inviteUrl = new URL(window.location.href);
-    inviteUrl.searchParams.set("lobby", current.displayCode);
-    inviteUrl.searchParams.set("topology", current.topology);
-    inviteUrl.searchParams.set("api", current.apiBase);
-    invite.textContent = `Invite: ${inviteUrl}`;
     setConnectedUi();
   });
   current.addEventListener("roster", (event) => {
@@ -224,8 +220,17 @@ function wireSession(current) {
 }
 
 function createSession() {
+  lobbyExperience?.close();
+  lobbyExperience = null;
   session?.close();
   session = new LobbySession({ apiBase, topology: topologySelect.value });
+  lobbyExperience = new LobbyExperience({
+    session,
+    root: document,
+    codeParam: "lobby",
+    inviteTitle: "Join my multiplayer arena",
+    inviteExtras: (current) => ({ topology: current.topology }),
+  });
   wireSession(session);
   return session;
 }
@@ -275,4 +280,8 @@ setInterval(() => {
   if (dx !== 0 || dy !== 0) sendLocalStep(dx, dy);
 }, 50);
 
-window.addEventListener("beforeunload", () => session?.close());
+window.addEventListener("beforeunload", () => {
+  lobbyExperience?.close();
+  session?.close();
+});
+if (inviteJoin.autoJoin) queueMicrotask(() => joinButton.click());
