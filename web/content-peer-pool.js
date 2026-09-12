@@ -4,7 +4,9 @@ const DEFAULT_MAX_PEERS = 4;
 const MAX_MAX_PEERS = 8;
 const DEFAULT_HIGH_WATER_MARK = 1_048_576;
 const DEFAULT_LOW_WATER_MARK = 262_144;
+const DEFAULT_RELAY_MAX_BYTES_PER_SECOND = 256 * 1024;
 const CONNECTION_ID_PATTERN = /^[0-9a-f]{16}$/;
+const RELAY_POLICIES = new Set(["deny", "allow", "limit"]);
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -35,6 +37,61 @@ function validateWaterMarks(highWaterMark, lowWaterMark) {
   }
 }
 
+function validateRelayPolicy(relayPolicy, relayMaxBytesPerSecond) {
+  if (!RELAY_POLICIES.has(relayPolicy)) {
+    throw new Error("relayPolicy must be 'deny', 'allow', or 'limit'");
+  }
+  if (!Number.isSafeInteger(relayMaxBytesPerSecond) || relayMaxBytesPerSecond < 1) {
+    throw new Error("relayMaxBytesPerSecond must be a positive safe integer");
+  }
+}
+
+function contentByteLength(value) {
+  if (typeof value === "string") return new TextEncoder().encode(value).byteLength;
+  if (value instanceof ArrayBuffer) return value.byteLength;
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  if (typeof Blob !== "undefined" && value instanceof Blob) return value.size;
+  throw new Error("Relay-limited content must have a measurable byte length");
+}
+
+function statEntries(report) {
+  if (!report) return [];
+  if (typeof report.values === "function") return [...report.values()];
+  const values = [];
+  if (typeof report.forEach === "function") report.forEach((value) => values.push(value));
+  return values;
+}
+
+export async function selectedIcePath(peer) {
+  if (!peer || typeof peer.getStats !== "function") return "unknown";
+  let report;
+  try {
+    report = await peer.getStats();
+  } catch {
+    return "unknown";
+  }
+  const entries = statEntries(report);
+  const byId = new Map(entries.filter((entry) => entry?.id).map((entry) => [entry.id, entry]));
+
+  let pair = null;
+  const transport = entries.find(
+    (entry) => entry?.type === "transport" && typeof entry.selectedCandidatePairId === "string",
+  );
+  if (transport) pair = byId.get(transport.selectedCandidatePairId) ?? null;
+  pair ??= entries.find(
+    (entry) =>
+      entry?.type === "candidate-pair" &&
+      (entry.selected === true || (entry.nominated === true && entry.state === "succeeded")),
+  );
+  if (!pair) return "unknown";
+
+  const local = byId.get(pair.localCandidateId);
+  const remote = byId.get(pair.remoteCandidateId);
+  if (!local || !remote) return "unknown";
+  if (local.candidateType === "relay" || remote.candidateType === "relay") return "relay";
+  return "direct";
+}
+
 function parseServerSignal(event) {
   if (typeof event.data !== "string") return null;
   let message;
@@ -54,7 +111,11 @@ export class ContentPeerPool extends EventTarget {
   constructor({
     session,
     maxPeers = DEFAULT_MAX_PEERS,
+    relayPolicy = "deny",
+    relayMaxBytesPerSecond = DEFAULT_RELAY_MAX_BYTES_PER_SECOND,
     peerConnectionFactory = (configuration) => new RTCPeerConnection(configuration),
+    now = () => Date.now(),
+    sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   } = {}) {
     super();
     if (!session || session.contentSharing !== true) {
@@ -67,15 +128,23 @@ export class ContentPeerPool extends EventTarget {
       throw new Error("ContentPeerPool requires a joined lobby session");
     }
     validateMaxPeers(maxPeers);
+    validateRelayPolicy(relayPolicy, relayMaxBytesPerSecond);
     if (typeof peerConnectionFactory !== "function") {
       throw new Error("peerConnectionFactory must be a function");
+    }
+    if (typeof now !== "function" || typeof sleep !== "function") {
+      throw new Error("now and sleep must be functions");
     }
 
     this.session = session;
     this.signaling = session.signaling;
     this.contentSharing = true;
     this.maxPeers = maxPeers;
+    this.relayPolicy = relayPolicy;
+    this.relayMaxBytesPerSecond = relayMaxBytesPerSecond;
     this.peerConnectionFactory = peerConnectionFactory;
+    this.now = now;
+    this.sleep = sleep;
     this.peers = new Map();
     this.closed = false;
     this.signalChains = new Map();
@@ -102,6 +171,12 @@ export class ContentPeerPool extends EventTarget {
 
   hasCapacity() {
     return this.peers.size < this.maxPeers;
+  }
+
+  async icePath(peerId) {
+    const link = this.peers.get(peerId);
+    if (!link) throw new Error(`Content peer ${peerId} is not connected`);
+    return selectedIcePath(link.peer);
   }
 
   async connect(peerId) {
@@ -133,6 +208,28 @@ export class ContentPeerPool extends EventTarget {
     if (!link || !this.#linkReady(link)) {
       throw new Error(`Content peer ${peerId} is not ready`);
     }
+
+    const icePath = await selectedIcePath(link.peer);
+    if (icePath === "relay") {
+      if (this.relayPolicy === "deny") {
+        this.#emitRelayPolicy(peerId, "denied", 0);
+        throw new Error(`Bulk content over TURN relay is disabled for peer ${peerId}`);
+      }
+      if (this.relayPolicy === "limit") {
+        const size = contentByteLength(data);
+        const now = Number(this.now());
+        if (!Number.isFinite(now)) throw new Error("now() must return a finite number");
+        const sendAt = Math.max(now, link.nextRelaySendAt);
+        const delayMs = Math.max(0, sendAt - now);
+        const reservationMs = Math.ceil((size * 1000) / this.relayMaxBytesPerSecond);
+        link.nextRelaySendAt = sendAt + reservationMs;
+        this.#emitRelayPolicy(peerId, "limited", delayMs, size);
+        if (delayMs > 0) await this.sleep(delayMs);
+      } else {
+        this.#emitRelayPolicy(peerId, "allowed", 0);
+      }
+    }
+
     await this.#waitForCapacity(link.channel, highWaterMark, lowWaterMark);
     if (!this.#linkReady(link)) throw new Error(`Content peer ${peerId} is not ready`);
     link.channel.send(data);
@@ -149,6 +246,20 @@ export class ContentPeerPool extends EventTarget {
     this.session.removeEventListener("participant-disconnected", this.onParticipantDisconnected);
     for (const peerId of [...this.peers.keys()]) this.#dropPeer(peerId, false);
     this.signalChains.clear();
+  }
+
+  #emitRelayPolicy(peerId, action, delayMs, bytes = null) {
+    this.dispatchEvent(
+      new CustomEvent("relay-policy", {
+        detail: {
+          peerId,
+          action,
+          delayMs,
+          ...(bytes === null ? {} : { bytes }),
+          maxBytesPerSecond: this.relayMaxBytesPerSecond,
+        },
+      }),
+    );
   }
 
   #requireParticipant(peerId) {
@@ -170,6 +281,7 @@ export class ContentPeerPool extends EventTarget {
       channel: null,
       pendingCandidates: [],
       readyEmitted: false,
+      nextRelaySendAt: 0,
     };
     this.peers.set(peerId, link);
 
