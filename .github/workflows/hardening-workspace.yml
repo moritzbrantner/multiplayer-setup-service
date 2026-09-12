@@ -1,0 +1,64 @@
+name: Hardening Workspace
+
+on:
+  push:
+    branches: [hardening/bounded-signaling-and-recovery]
+    paths: [.github/workflows/hardening-workspace.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hardening-workspace
+  cancel-in-progress: false
+
+jobs:
+  validate-edits:
+    if: github.repository == 'moritzbrantner/multiplayer-setup-service' && github.ref == 'refs/heads/hardening/bounded-signaling-and-recovery'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0
+      - name: Apply narrowly scoped source repair
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('src/main.rs')
+          text = path.read_text()
+          old = '                max_participants: created.max_participants,\n                websocket_path: format!("/lobbies/{}/connect", created.lobby_id),\n'
+          assert text.count(old) <= 1
+          text = text.replace(old, '                max_participants: created.max_participants,\n')
+          path.write_text(text)
+      - name: Format with the repository toolchain
+        run: cargo fmt --all
+      - name: Validate Rust changes
+        run: |
+          cargo clippy --all-targets --all-features --locked -- -D warnings
+          cargo test --all-targets --all-features --locked
+      - name: Export the public source workspace and patch
+        if: always()
+        run: |
+          mkdir -p /tmp/hardening-workspace
+          git diff --binary > /tmp/hardening-workspace/repair.patch
+          git archive da50b8aa5cc09a49fc53d543658c0bf0c3d9a13f | gzip > /tmp/hardening-workspace/base.tar.gz
+          tar --exclude=.git --exclude=target -czf /tmp/hardening-workspace/worktree.tar.gz .
+      - name: Upload workspace evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardening-workspace
+          path: /tmp/hardening-workspace
+          retention-days: 3
+      - name: Commit validated repair to this work branch only
+        if: success()
+        run: |
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix: validate and format bounded signaling implementation'
+            git push origin HEAD:refs/heads/hardening/bounded-signaling-and-recovery
+          fi
