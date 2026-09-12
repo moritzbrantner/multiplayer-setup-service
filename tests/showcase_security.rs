@@ -16,9 +16,13 @@ fn card_showcase_uses_host_validated_intents_and_hidden_views() {
     assert!(html.contains("Send forged card ID"));
     assert!(html.contains("Replay last intent"));
     assert!(client.contains("./lobby-session.js"));
+    assert!(client.contains("./game-commands.js"));
     assert!(client.contains("topology: \"host\""));
     assert!(client.contains("host(4)"));
     assert!(client.contains("type: \"card-intent\""));
+    assert!(client.contains("commands.sendToHost(CARD_INTENT_COMMAND, intent)"));
+    assert!(client.contains("currentCommands.handle(CARD_INTENT_COMMAND"));
+    assert!(!client.contains("data?.type === \"card-intent\""));
     assert!(client.contains("type: \"card-rejection\""));
     assert!(model.contains("stale-sequence"));
     assert!(model.contains("card-not-in-hand"));

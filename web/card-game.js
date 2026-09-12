@@ -1,3 +1,4 @@
+import { GameCommands } from "./game-commands.js";
 import { LobbySession } from "./lobby-session.js";
 import {
   applyCardIntent,
@@ -6,6 +7,7 @@ import {
   createCardGame,
 } from "./card-game-model.mjs";
 
+const CARD_INTENT_COMMAND = "card.intent";
 const params = new URLSearchParams(window.location.search);
 const apiBase = params.get("api") || "http://127.0.0.1:8787";
 const hostButton = document.querySelector("#host");
@@ -30,6 +32,7 @@ const queryLobby = params.get("lobby");
 if (queryLobby) codeInput.value = queryLobby;
 
 let session = null;
+let commands = null;
 let authoritativeState = null;
 let currentView = null;
 let localSequence = 0;
@@ -172,13 +175,13 @@ function handleHostIntent(peerId, intent) {
 }
 
 function transmitIntent(intent, { remember = true } = {}) {
-  if (!session || !currentView) return;
+  if (!session || !commands || !currentView) return;
   if (remember) lastIntent = structuredClone(intent);
   replayButton.disabled = !lastIntent;
   if (session.participantId === session.hostParticipantId) {
     handleHostIntent(session.participantId, intent);
   } else if (session.readyPeerIds().includes(session.hostParticipantId)) {
-    session.sendReliable(session.hostParticipantId, intent);
+    commands.sendToHost(CARD_INTENT_COMMAND, intent);
   } else {
     status.textContent = "Host peer link is not ready.";
   }
@@ -191,7 +194,17 @@ function sendIntent(action, cardId) {
   transmitIntent(intent);
 }
 
-function wireSession(current) {
+function wireSession(current, currentCommands) {
+  currentCommands.handle(CARD_INTENT_COMMAND, (intent, { peerId }) => {
+    if (current !== session || currentCommands !== commands) return;
+    if (current.participantId !== current.hostParticipantId) return;
+    handleHostIntent(peerId, intent);
+  });
+  currentCommands.addEventListener("error", (event) => {
+    if (current !== session || currentCommands !== commands) return;
+    status.textContent = event.detail.error.message;
+  });
+
   current.addEventListener("lobby", () => {
     codeInput.value = current.displayCode;
     const inviteUrl = new URL(window.location.href);
@@ -219,11 +232,8 @@ function wireSession(current) {
   });
   current.addEventListener("peer-statechange", renderLobbyState);
   current.addEventListener("reliable", (event) => {
+    if (current.participantId === current.hostParticipantId) return;
     const { peerId, data } = event.detail;
-    if (current.participantId === current.hostParticipantId) {
-      if (data?.type === "card-intent") handleHostIntent(peerId, data);
-      return;
-    }
     if (peerId !== current.hostParticipantId) return;
     if (data?.type === "card-view") {
       renderView(data);
@@ -238,13 +248,16 @@ function wireSession(current) {
 }
 
 function createSession() {
+  commands?.close();
+  commands = null;
   session?.close();
   authoritativeState = null;
   currentView = null;
   localSequence = 0;
   lastIntent = null;
   session = new LobbySession({ apiBase, topology: "host" });
-  wireSession(session);
+  commands = new GameCommands({ session });
+  wireSession(session, commands);
   return session;
 }
 
@@ -292,5 +305,8 @@ replayButton.addEventListener("click", () => {
   transmitIntent(structuredClone(lastIntent), { remember: false });
 });
 
-window.addEventListener("beforeunload", () => session?.close());
+window.addEventListener("beforeunload", () => {
+  commands?.close();
+  session?.close();
+});
 renderLobbyState();
