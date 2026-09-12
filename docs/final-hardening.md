@@ -6,15 +6,15 @@ Feature scope remains a signaling broker plus opt-in browser content transfer. T
 
 Both two-player rooms and multiparty lobbies use the same bounded outbox implementation:
 
-- Each connection has at most 32 queued signaling envelopes. The shared application budget is 16 MiB of serialized text capacity plus conservative item overhead, including reservations held during socket writes. This is not a bound on total process memory, socket buffers, or allocator metadata.
-- Outbound frames are bounded by the inbound signaling limit plus 1024 bytes of server-envelope overhead. A full queue or exhausted byte budget cancels that recipient and reports an explicit overload error to its sender. Messages are not silently discarded while a recipient remains usable.
+- Each connection has at most 32 queued signaling envelopes. Queued and in-flight relays share a 16 MiB application budget of serialized text capacity plus conservative item overhead. Direct control responses have a separate bounded 2 MiB reserve so queue saturation can still be reported without borrowing more relay capacity. These budgets are not bounds on total process memory, socket buffers, or allocator metadata.
+- Outbound frames are bounded by the inbound signaling limit plus 1024 bytes of server-envelope overhead. A recipient whose own queue fills is cancelled rather than silently losing SDP/ICE messages. Exhausting the aggregate relay budget rejects that relay but does not evict an otherwise healthy recipient; the sender receives an overload response when bounded control-response capacity remains available.
 - Cancellation has a separate notification path; it cannot wait behind queued signaling. A socket write has a two-second deadline, so a currently stalled write also cannot wait indefinitely.
 - A socket accepts a burst of 128 frames and 1 MiB, refilling at 64 frames and 512 KiB per second. Control frames count too. Exceeding either limit disconnects the sender.
 - HTTP admission bounds concurrent handlers at 128 with a ten-second processing deadline. Transport-peer IP buckets default to 120 requests/second and a 240-request burst. At most 4096 client buckets are tracked, with idle reclamation; tracking exhaustion fails closed.
 
 `HTTP_REQUESTS_PER_SECOND` and `HTTP_BURST_REQUESTS` configure HTTP admission within 1..100000. Behind a reverse proxy, the proxy is one transport client: configure an appropriate aggregate budget and enforce end-client limits at the edge. Arbitrary forwarded-address headers are deliberately not trusted. This application protection does not replace reverse-proxy connection limits or network-level denial-of-service protection.
 
-The release throughput benchmark explicitly provisions a higher, still bounded HTTP budget. It retains its workloads and timing thresholds. Separate unit and real-service contract tests check rejection, refill, bounded tracking, queue cancellation, and healthy-peer isolation.
+The release throughput benchmark explicitly provisions a higher, still bounded HTTP budget. It retains its workloads and timing thresholds. Separate unit and real-service contract tests check rejection, refill, bounded tracking, queue cancellation, aggregate-pressure isolation, and healthy-peer isolation.
 
 ## Expiration lookup
 
