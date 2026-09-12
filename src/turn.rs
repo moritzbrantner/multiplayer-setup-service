@@ -212,7 +212,7 @@ fn sha1_digest(input: &[u8]) -> [u8; 20] {
     let mut h3 = 0x1032_5476_u32;
     let mut h4 = 0xC3D2_E1F0_u32;
 
-    for chunk in message.chunks_exact(HMAC_BLOCK_BYTES) {
+    for chunk in message.as_chunks::<HMAC_BLOCK_BYTES>().0 {
         let mut words = [0_u32; 80];
         for (index, word) in words.iter_mut().take(16).enumerate() {
             let offset = index * 4;
