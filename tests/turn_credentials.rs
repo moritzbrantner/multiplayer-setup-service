@@ -44,7 +44,10 @@ impl Service {
     fn wait_until_ready(&self) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            if matches!(request(self.port, "GET", "/health", None, &[]), Ok((200, _))) {
+            if matches!(
+                request(self.port, "GET", "/health", None, &[]),
+                Ok((200, _))
+            ) {
                 return;
             }
             thread::sleep(Duration::from_millis(25));
@@ -150,10 +153,12 @@ fn authenticated_lobby_participant_receives_short_lived_turn_credentials() {
             "turns:turn.example.test:5349?transport=tcp"
         ])
     );
-    assert!(server["username"]
-        .as_str()
-        .unwrap()
-        .ends_with(&format!(":{participant_id}")));
+    assert!(
+        server["username"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!(":{participant_id}"))
+    );
     assert!(!server["credential"].as_str().unwrap().is_empty());
     assert!(credentials["expiresAt"].as_u64().unwrap() > 0);
 }
@@ -167,10 +172,12 @@ fn turn_credentials_require_the_matching_participant_capability() {
     let body = format!(r#"{{"participantId":"{participant_id}"}}"#);
     let path = format!("/lobbies/{lobby_id}/turn-credentials");
 
-    let (status, response_body) =
-        request(service.port, "POST", &path, Some(&body), &[]).unwrap();
+    let (status, response_body) = request(service.port, "POST", &path, Some(&body), &[]).unwrap();
     assert_eq!(status, 401);
-    assert_eq!(json(&response_body)["error"]["code"], "invalid-credentials");
+    assert_eq!(
+        json(&response_body)["error"]["code"],
+        "invalid-credentials"
+    );
 
     let wrong = format!("Bearer {}", "f".repeat(64));
     let (status, response_body) = request(
@@ -182,7 +189,10 @@ fn turn_credentials_require_the_matching_participant_capability() {
     )
     .unwrap();
     assert_eq!(status, 401);
-    assert_eq!(json(&response_body)["error"]["code"], "invalid-credentials");
+    assert_eq!(
+        json(&response_body)["error"]["code"],
+        "invalid-credentials"
+    );
 }
 
 #[test]
@@ -204,5 +214,8 @@ fn authenticated_request_fails_closed_when_turn_is_not_configured() {
     )
     .unwrap();
     assert_eq!(status, 503);
-    assert_eq!(json(&response_body)["error"]["code"], "turn-not-configured");
+    assert_eq!(
+        json(&response_body)["error"]["code"],
+        "turn-not-configured"
+    );
 }
