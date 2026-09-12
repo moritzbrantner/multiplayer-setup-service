@@ -1,15 +1,15 @@
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::protocol::is_valid_participant_id;
 use crate::{
-    bearer_capability_token, error_response, invalid_credentials_response,
-    lobby_store_error_response, validated_room_id, AppState,
+    AppState, bearer_capability_token, error_response, invalid_credentials_response,
+    lobby_store_error_response, validated_room_id,
 };
 
 const DEFAULT_TURN_CREDENTIAL_TTL_SECONDS: u64 = 600;
@@ -224,11 +224,9 @@ fn sha1_digest(input: &[u8]) -> [u8; 20] {
             ]);
         }
         for index in 16..80 {
-            words[index] = (words[index - 3]
-                ^ words[index - 8]
-                ^ words[index - 14]
-                ^ words[index - 16])
-                .rotate_left(1);
+            words[index] =
+                (words[index - 3] ^ words[index - 8] ^ words[index - 14] ^ words[index - 16])
+                    .rotate_left(1);
         }
 
         let mut a = h0;
@@ -279,13 +277,9 @@ fn base64_standard(bytes: &[u8]) -> String {
         let third = chunk.get(2).copied().unwrap_or(0);
 
         encoded.push(BASE64_ALPHABET[(first >> 2) as usize] as char);
-        encoded.push(
-            BASE64_ALPHABET[(((first & 0x03) << 4) | (second >> 4)) as usize] as char,
-        );
+        encoded.push(BASE64_ALPHABET[(((first & 0x03) << 4) | (second >> 4)) as usize] as char);
         if chunk.len() >= 2 {
-            encoded.push(
-                BASE64_ALPHABET[(((second & 0x0f) << 2) | (third >> 6)) as usize] as char,
-            );
+            encoded.push(BASE64_ALPHABET[(((second & 0x0f) << 2) | (third >> 6)) as usize] as char);
         } else {
             encoded.push('=');
         }
@@ -307,8 +301,8 @@ mod tests {
         assert_eq!(
             sha1_digest(b"abc"),
             [
-                0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e, 0x25, 0x71, 0x78,
-                0x50, 0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d,
+                0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e, 0x25, 0x71, 0x78, 0x50,
+                0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d,
             ]
         );
     }
@@ -319,8 +313,8 @@ mod tests {
         assert_eq!(
             hmac_sha1(&key, b"Hi There"),
             [
-                0xb6, 0x17, 0x31, 0x86, 0x55, 0x05, 0x72, 0x64, 0xe2, 0x8b, 0xc0, 0xb6, 0xfb,
-                0x37, 0x8c, 0x8e, 0xf1, 0x46, 0xbe, 0x00,
+                0xb6, 0x17, 0x31, 0x86, 0x55, 0x05, 0x72, 0x64, 0xe2, 0x8b, 0xc0, 0xb6, 0xfb, 0x37,
+                0x8c, 0x8e, 0xf1, 0x46, 0xbe, 0x00,
             ]
         );
     }
@@ -343,7 +337,10 @@ mod tests {
         assert_eq!(response.expires_at, 1_600_000);
         assert_eq!(response.ice_servers.len(), 1);
         assert_eq!(response.ice_servers[0].username, "1600:11111111");
-        assert_eq!(response.ice_servers[0].credential, "/DRe79smvE5QcZBsM8zp2Cv4tcE=");
+        assert_eq!(
+            response.ice_servers[0].credential,
+            "/DRe79smvE5QcZBsM8zp2Cv4tcE="
+        );
     }
 
     #[test]
