@@ -24,6 +24,10 @@ impl Service {
             .env("ROOM_TTL_SECONDS", "60")
             .env("MAX_ROOMS", "50000")
             .env("MAX_LOBBIES", "50000")
+            // Measure throughput inside an explicitly provisioned admission budget.
+            // Rejection with production defaults is covered by the HTTP contract suite.
+            .env("HTTP_REQUESTS_PER_SECOND", "60000")
+            .env("HTTP_BURST_REQUESTS", "60000")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()

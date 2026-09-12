@@ -261,7 +261,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/lobbies/{lobby_id}/connect", get(connect_lobby))
         .layer(axum::middleware::from_fn_with_state(
-            admission::Admission::default(),
+            admission::Admission::with_limits(
+                configured_u64("HTTP_REQUESTS_PER_SECOND", 120, 1, 100_000) as u32,
+                configured_u64("HTTP_BURST_REQUESTS", 240, 1, 100_000) as u32,
+            ),
             admission::limit_http,
         ))
         .layer(cors)

@@ -150,6 +150,19 @@ export class ResilientLobbySession extends EventTarget {
     this.established = false;
   }
 
+  get signaling() {
+    return this._signaling ?? null;
+  }
+
+  set signaling(socket) {
+    const previousSocket = this._signaling ?? null;
+    if (previousSocket === socket) return;
+    this._signaling = socket;
+    this.dispatchEvent(new CustomEvent("signaling-changed", {
+      detail: { socket, previousSocket },
+    }));
+  }
+
   async host(maxParticipants = 16) {
     if (!Number.isInteger(maxParticipants) || maxParticipants < 2 || maxParticipants > 16) {
       throw new Error("Lobby size must be between 2 and 16");
@@ -346,6 +359,7 @@ export class ResilientLobbySession extends EventTarget {
     this.signaling = socket;
 
     socket.addEventListener("message", (event) => {
+      if (this.signaling !== socket || this.closed) return;
       this.#handleSignalingMessage(event).catch((error) => this.#fail(error));
     });
     socket.addEventListener("close", () => {
@@ -354,6 +368,7 @@ export class ResilientLobbySession extends EventTarget {
       this.#scheduleReconnect();
     });
     socket.addEventListener("error", () => {
+      if (this.signaling !== socket || this.closed) return;
       this.#fail(new Error("Lobby signaling WebSocket failed"));
     });
 

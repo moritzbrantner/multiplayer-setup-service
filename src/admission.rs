@@ -21,6 +21,8 @@ const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 pub struct Admission {
     clients: Arc<Mutex<Clients>>,
     in_flight: Arc<Semaphore>,
+    requests_per_second: u32,
+    burst: u32,
 }
 
 struct Clients {
@@ -66,11 +68,23 @@ impl Default for Admission {
                 next_cleanup: Instant::now() + CLEANUP_INTERVAL,
             })),
             in_flight: Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
+            requests_per_second: HTTP_RATE,
+            burst: HTTP_BURST,
         }
     }
 }
 
 impl Admission {
+    pub fn with_limits(requests_per_second: u32, burst: u32) -> Self {
+        assert!((1..=100_000).contains(&requests_per_second));
+        assert!((1..=100_000).contains(&burst));
+        Self {
+            requests_per_second,
+            burst,
+            ..Self::default()
+        }
+    }
+
     fn allow(&self, ip: IpAddr, now: Instant) -> Result<(), StatusCode> {
         let mut clients = self
             .clients
@@ -88,7 +102,7 @@ impl Admission {
         let bucket = clients
             .entries
             .entry(ip)
-            .or_insert_with(|| Bucket::new(HTTP_BURST, HTTP_RATE, now));
+            .or_insert_with(|| Bucket::new(self.burst, self.requests_per_second, now));
         if bucket.allow(1, now) {
             Ok(())
         } else {
@@ -146,6 +160,10 @@ impl Default for SocketRate {
 
 impl SocketRate {
     pub fn allow(&mut self, frame: &Message) -> bool {
+        self.allow_at(frame, Instant::now())
+    }
+
+    fn allow_at(&mut self, frame: &Message, now: Instant) -> bool {
         let bytes = match frame {
             Message::Text(text) => text.len(),
             Message::Binary(bytes) | Message::Ping(bytes) | Message::Pong(bytes) => bytes.len(),
@@ -154,7 +172,6 @@ impl SocketRate {
         let Ok(bytes) = u32::try_from(bytes) else {
             return false;
         };
-        let now = Instant::now();
         self.messages.allow(1, now) && self.bytes.allow(bytes, now)
     }
 }
@@ -213,9 +230,10 @@ mod tests {
     fn websocket_control_frames_also_consume_rate_capacity() {
         let mut rate = SocketRate::default();
         let frame = Message::Ping(Vec::new().into());
+        let now = rate.messages.updated;
         for _ in 0..128 {
-            assert!(rate.allow(&frame));
+            assert!(rate.allow_at(&frame, now));
         }
-        assert!(!rate.allow(&frame));
+        assert!(!rate.allow_at(&frame, now));
     }
 }

@@ -12,6 +12,10 @@ struct Service {
 
 impl Service {
     fn start() -> Self {
+        Self::start_with_admission(120, 240)
+    }
+
+    fn start_with_admission(rate: u32, burst: u32) -> Self {
         let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = reservation.local_addr().unwrap().port();
         drop(reservation);
@@ -22,6 +26,8 @@ impl Service {
             .env("ROOM_TTL_SECONDS", "60")
             .env("MAX_ROOMS", "32")
             .env("MAX_LOBBIES", "32")
+            .env("HTTP_REQUESTS_PER_SECOND", rate.to_string())
+            .env("HTTP_BURST_REQUESTS", burst.to_string())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -192,4 +198,25 @@ fn legacy_two_player_http_contract_remains_compatible() {
     let (status, body) = request(service.port, "GET", &format!("/rooms/{room_id}"), None).unwrap();
     assert_eq!(status, 200);
     assert_eq!(json(&body)["status"], "paired");
+}
+
+#[test]
+fn http_admission_rejects_a_burst_without_disabling_health_or_other_routes() {
+    let service = Service::start_with_admission(1, 4);
+    let mut limited = false;
+    for _ in 0..12 {
+        let (status, body) = request(service.port, "GET", "/health", None).unwrap();
+        if status == 429 {
+            assert_eq!(json(&body)["error"]["code"], "signaling-admission-limited");
+            limited = true;
+            break;
+        }
+        assert_eq!(status, 200);
+    }
+    assert!(limited, "the configured per-client burst must be enforced");
+    thread::sleep(Duration::from_millis(1100));
+    assert_eq!(
+        request(service.port, "GET", "/health", None).unwrap().0,
+        200
+    );
 }

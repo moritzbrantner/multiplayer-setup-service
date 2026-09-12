@@ -1,3 +1,5 @@
+import { sessionUploadBudget } from "./content-upload-budget.js";
+
 const CONTENT_PEER_PROTOCOL = 1;
 const CONTENT_CHANNEL_LABEL = "content-swarm-v1";
 const DEFAULT_MAX_PEERS = 4;
@@ -110,6 +112,7 @@ function parseServerSignal(event) {
 export class ContentPeerPool extends EventTarget {
   constructor({
     session,
+    uploadBudget = null,
     maxPeers = DEFAULT_MAX_PEERS,
     relayPolicy = "deny",
     relayMaxBytesPerSecond = DEFAULT_RELAY_MAX_BYTES_PER_SECOND,
@@ -137,7 +140,13 @@ export class ContentPeerPool extends EventTarget {
     }
 
     this.session = session;
-    this.signaling = session.signaling;
+    this.signaling = null;
+    this.signalingGeneration = 0;
+    this.uploadBudget = uploadBudget ?? sessionUploadBudget(session);
+    if (typeof this.uploadBudget.consume !== "function") {
+      throw new Error("uploadBudget must provide consume()");
+    }
+    this.sendAbort = new AbortController();
     this.contentSharing = true;
     this.maxPeers = maxPeers;
     this.relayPolicy = relayPolicy;
@@ -149,12 +158,18 @@ export class ContentPeerPool extends EventTarget {
     this.closed = false;
     this.signalChains = new Map();
 
-    this.onSignalingMessage = (event) => this.#enqueueSignal(event);
+    this.onSignalingMessage = null;
+    this.onSignalingChanged = () => this.#bindSignaling();
+    this.onSessionState = (event) => {
+      if (event.detail?.state === "closed") this.close();
+    };
     this.onParticipantDisconnected = (event) => {
       const peerId = event.detail?.participantId;
       if (typeof peerId === "string") this.#dropPeer(peerId, false);
     };
-    this.signaling.addEventListener("message", this.onSignalingMessage);
+    this.#bindSignaling();
+    session.addEventListener("signaling-changed", this.onSignalingChanged);
+    session.addEventListener("statechange", this.onSessionState);
     session.addEventListener("participant-disconnected", this.onParticipantDisconnected);
   }
 
@@ -181,6 +196,8 @@ export class ContentPeerPool extends EventTarget {
 
   async connect(peerId) {
     if (this.closed) throw new Error("ContentPeerPool is closed");
+    this.#bindSignaling();
+    if (!signalingOpen(this.signaling)) throw new Error("Lobby signaling socket is not open");
     this.#requireParticipant(peerId);
     const existing = this.peers.get(peerId);
     if (existing) return existing.connectionId;
@@ -188,10 +205,18 @@ export class ContentPeerPool extends EventTarget {
 
     const link = this.#createLink(peerId, createConnectionId(), true);
     this.#bindChannel(link, link.peer.createDataChannel(CONTENT_CHANNEL_LABEL, { ordered: true }));
-    const offer = await link.peer.createOffer();
-    await link.peer.setLocalDescription(offer);
-    this.#send(peerId, link.connectionId, { description: link.peer.localDescription });
-    return link.connectionId;
+    const generation = this.signalingGeneration;
+    try {
+      const offer = await link.peer.createOffer();
+      this.#assertCurrent(link, generation);
+      await link.peer.setLocalDescription(offer);
+      this.#assertCurrent(link, generation);
+      this.#send(peerId, link.connectionId, { description: link.peer.localDescription });
+      return link.connectionId;
+    } catch (error) {
+      if (this.peers.get(peerId) === link) this.#dropPeer(peerId, false);
+      throw error;
+    }
   }
 
   async sendContent(
@@ -231,7 +256,23 @@ export class ContentPeerPool extends EventTarget {
     }
 
     await this.#waitForCapacity(link.channel, highWaterMark, lowWaterMark);
-    if (!this.#linkReady(link)) throw new Error(`Content peer ${peerId} is not ready`);
+    // Pacing is shared by every content pool in this session, including direct peers.
+    await this.uploadBudget.consume(contentByteLength(data), { signal: this.sendAbort.signal });
+    if (this.closed || this.peers.get(peerId) !== link || !this.#linkReady(link)) {
+      throw new Error(`Content peer ${peerId} is not ready`);
+    }
+    // A route can change while backpressure or an upload budget delays a send.
+    const finalPath = await selectedIcePath(link.peer);
+    if (finalPath === "relay" && this.relayPolicy === "deny") {
+      this.#emitRelayPolicy(peerId, "denied", 0);
+      throw new Error(`Bulk content over TURN relay is disabled for peer ${peerId}`);
+    }
+    if (finalPath === "relay" && icePath !== "relay" && this.relayPolicy === "limit") {
+      throw new Error("Content route changed to TURN; retry under the relay rate policy");
+    }
+    if (this.closed || this.uploadBudget.paused || this.peers.get(peerId) !== link || !this.#linkReady(link)) {
+      throw new Error(`Content peer ${peerId} is not ready for upload`);
+    }
     link.channel.send(data);
   }
 
@@ -242,10 +283,37 @@ export class ContentPeerPool extends EventTarget {
   close() {
     if (this.closed) return;
     this.closed = true;
-    this.signaling.removeEventListener("message", this.onSignalingMessage);
+    this.sendAbort.abort();
+    this.signalingGeneration += 1;
+    this.signaling?.removeEventListener("message", this.onSignalingMessage);
+    this.session.removeEventListener("signaling-changed", this.onSignalingChanged);
+    this.session.removeEventListener("statechange", this.onSessionState);
     this.session.removeEventListener("participant-disconnected", this.onParticipantDisconnected);
     for (const peerId of [...this.peers.keys()]) this.#dropPeer(peerId, false);
     this.signalChains.clear();
+  }
+
+  #bindSignaling() {
+    if (this.closed || this.signaling === this.session.signaling) return;
+    this.signaling?.removeEventListener("message", this.onSignalingMessage);
+    this.signaling = this.session.signaling;
+    this.signalingGeneration += 1;
+    const socket = this.signaling;
+    const generation = this.signalingGeneration;
+    this.onSignalingMessage = (event) => {
+      if (this.signaling === socket && generation === this.signalingGeneration) this.#enqueueSignal(event);
+    };
+    socket?.addEventListener("message", this.onSignalingMessage);
+    this.signalChains.clear();
+    for (const [peerId, link] of this.peers) {
+      if (!this.#linkReady(link)) this.#dropPeer(peerId, false);
+    }
+  }
+
+  #assertCurrent(link, generation) {
+    if (this.closed || generation !== this.signalingGeneration || this.peers.get(link.peerId) !== link) {
+      throw new Error("Content negotiation was superseded by signaling recovery");
+    }
   }
 
   #emitRelayPolicy(peerId, action, delayMs, bytes = null) {
@@ -286,11 +354,12 @@ export class ContentPeerPool extends EventTarget {
     this.peers.set(peerId, link);
 
     peer.addEventListener("icecandidate", (event) => {
-      if (event.candidate) {
+      if (event.candidate && this.peers.get(peerId) === link && signalingOpen(this.session.signaling)) {
         this.#send(peerId, connectionId, { candidate: event.candidate.toJSON() });
       }
     });
     peer.addEventListener("connectionstatechange", () => {
+      if (this.peers.get(peerId) !== link) return;
       if (peer.connectionState === "failed" || peer.connectionState === "closed") {
         this.#dropPeer(peerId, false);
         return;
@@ -298,7 +367,7 @@ export class ContentPeerPool extends EventTarget {
       this.#maybeReady(link);
     });
     peer.addEventListener("datachannel", (event) => {
-      if (event.channel.label !== CONTENT_CHANNEL_LABEL || link.channel) {
+      if (this.peers.get(peerId) !== link || event.channel.label !== CONTENT_CHANNEL_LABEL || link.channel) {
         event.channel.close();
         return;
       }
@@ -318,6 +387,7 @@ export class ContentPeerPool extends EventTarget {
     if ("binaryType" in channel) channel.binaryType = "arraybuffer";
     channel.addEventListener("open", () => this.#maybeReady(link));
     channel.addEventListener("message", (event) => {
+      if (this.closed || this.peers.get(link.peerId) !== link) return;
       this.dispatchEvent(
         new CustomEvent("content", {
           detail: { peerId: link.peerId, data: event.data },
@@ -325,7 +395,7 @@ export class ContentPeerPool extends EventTarget {
       );
     });
     channel.addEventListener("close", () => {
-      this.#dropPeer(link.peerId, false);
+      if (this.peers.get(link.peerId) === link) this.#dropPeer(link.peerId, false);
     });
   }
 
@@ -352,16 +422,26 @@ export class ContentPeerPool extends EventTarget {
     }
     if (parsed.peerId === this.session.participantId) return;
 
+    const generation = this.signalingGeneration;
     const previous = this.signalChains.get(parsed.peerId) ?? Promise.resolve();
     const next = previous
-      .then(() => this.#handleSignal(parsed.peerId, parsed.envelope))
+      .then(() => {
+        if (!this.closed && generation === this.signalingGeneration) {
+          return this.#handleSignal(parsed.peerId, parsed.envelope, generation);
+        }
+      })
       .catch((error) => {
-        this.dispatchEvent(new CustomEvent("error", { detail: { peerId: parsed.peerId, error } }));
+        if (!this.closed && generation === this.signalingGeneration) {
+          this.dispatchEvent(new CustomEvent("error", { detail: { peerId: parsed.peerId, error } }));
+        }
+      })
+      .finally(() => {
+        if (this.signalChains.get(parsed.peerId) === next) this.signalChains.delete(parsed.peerId);
       });
     this.signalChains.set(parsed.peerId, next);
   }
 
-  async #handleSignal(peerId, envelope) {
+  async #handleSignal(peerId, envelope, generation) {
     if (typeof envelope.reject === "string" || envelope.close === true) {
       const link = this.peers.get(peerId);
       if (link?.connectionId === envelope.connectionId) this.#dropPeer(peerId, false);
@@ -391,10 +471,14 @@ export class ContentPeerPool extends EventTarget {
 
     if (envelope.description) {
       await link.peer.setRemoteDescription(envelope.description);
+      this.#assertCurrent(link, generation);
       await this.#flushCandidates(link);
+      this.#assertCurrent(link, generation);
       if (envelope.description.type === "offer") {
         const answer = await link.peer.createAnswer();
+        this.#assertCurrent(link, generation);
         await link.peer.setLocalDescription(answer);
+        this.#assertCurrent(link, generation);
         this.#send(peerId, link.connectionId, { description: link.peer.localDescription });
       }
     }
@@ -411,6 +495,7 @@ export class ContentPeerPool extends EventTarget {
   }
 
   #send(peerId, connectionId, data) {
+    this.#bindSignaling();
     if (!signalingOpen(this.signaling)) throw new Error("Lobby signaling socket is not open");
     this.signaling.send(
       JSON.stringify({
@@ -454,6 +539,7 @@ export class ContentPeerPool extends EventTarget {
       const cleanup = () => {
         channel.removeEventListener("bufferedamountlow", onLow);
         channel.removeEventListener("close", onClose);
+        this.sendAbort.signal.removeEventListener("abort", onClose);
       };
       const onLow = () => {
         cleanup();
@@ -465,6 +551,11 @@ export class ContentPeerPool extends EventTarget {
       };
       channel.addEventListener("bufferedamountlow", onLow);
       channel.addEventListener("close", onClose, { once: true });
+      this.sendAbort.signal.addEventListener("abort", onClose, { once: true });
+      if (this.sendAbort.signal.aborted || channel.readyState !== "open") {
+        onClose();
+        return;
+      }
       if (channel.bufferedAmount <= lowWaterMark) {
         cleanup();
         resolve();
