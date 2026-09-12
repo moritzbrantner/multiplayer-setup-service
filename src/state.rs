@@ -1,3 +1,6 @@
+#[path = "outbox.rs"]
+pub mod outbox;
+
 use crate::protocol::{
     PeerRole, ServerMessage, generate_capability_token, generate_room_id, hash_capability_token,
     hashes_equal,
@@ -9,16 +12,27 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 
 const MAX_ROOM_CREATION_ATTEMPTS: usize = 5;
 
-pub type ConnectionSender = mpsc::UnboundedSender<ConnectionCommand>;
+pub type ConnectionSender = outbox::Sender;
 
 #[derive(Clone, Debug)]
 pub enum ConnectionCommand {
     Send(ServerMessage),
     Close,
+}
+
+impl outbox::Command for ConnectionCommand {
+    fn into_text(self) -> Option<String> {
+        match self {
+            Self::Send(message) => {
+                Some(serde_json::to_string(&message).expect("server message should serialize"))
+            }
+            Self::Close => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -380,7 +394,7 @@ mod tests {
         let created = store.create_room(Duration::from_secs(600)).await.unwrap();
         store.join_room(&created.room_id).await.unwrap();
 
-        let (first_sender, _first_receiver) = mpsc::unbounded_channel();
+        let (first_sender, _first_receiver) = outbox::channel();
         let first = store
             .register_connection(
                 &created.room_id,
@@ -392,7 +406,7 @@ mod tests {
             .unwrap();
         assert!(first.replaced.is_none());
 
-        let (second_sender, _second_receiver) = mpsc::unbounded_channel();
+        let (second_sender, _second_receiver) = outbox::channel();
         let second = store
             .register_connection(
                 &created.room_id,
