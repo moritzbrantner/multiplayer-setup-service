@@ -49,7 +49,7 @@ body {
     var(--ui-bg);
   color: var(--ui-ink);
 }
-main { width: min(100%, 1080px); margin: 0 auto; padding: 24px 28px 72px; }
+body:not(.explainer-page) main { width: min(100%, 1080px); margin: 0 auto; padding: 24px 28px 72px; }
 a { color: var(--ui-accent); }
 p { line-height: 1.55; }
 h1, h2, h3 { color: var(--ui-ink); }
@@ -283,7 +283,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .game-telemetry { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 
 @media (max-width: 760px) {
-  main { padding: 18px 16px 54px; }
+  body:not(.explainer-page) main { padding: 18px 16px 54px; }
   body:not(.explainer-page) nav { margin-bottom: 38px; }
   .lobby { grid-template-columns: 1fr 1fr; }
   .lobby > span { display: none; }
