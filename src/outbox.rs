@@ -1,11 +1,14 @@
-//! Non-blocking signaling delivery. A full outbox cancels its recipient instead
-//! of dropping an SDP/ICE message and leaving a silently inconsistent session.
+//! Non-blocking signaling delivery. A full per-recipient outbox cancels that
+//! recipient instead of dropping an SDP/ICE message and leaving a silently
+//! inconsistent session. Aggregate pressure rejects new relays without
+//! disconnecting an otherwise healthy recipient.
 
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
 pub const QUEUE_CAPACITY: usize = 32;
 pub const TOTAL_QUEUE_BYTES: usize = 16 * 1024 * 1024;
+const TOTAL_CONTROL_BYTES: usize = 2 * 1024 * 1024;
 const MAX_FRAME_BYTES: usize = crate::protocol::MAX_SIGNAL_BYTES + 1024;
 const ITEM_OVERHEAD: usize = 128;
 
@@ -41,15 +44,22 @@ pub enum SendError {
     TooLarge,
 }
 
-fn shared_budget() -> Arc<Semaphore> {
+fn shared_queue_budget() -> Arc<Semaphore> {
     static BUDGET: OnceLock<Arc<Semaphore>> = OnceLock::new();
     BUDGET
         .get_or_init(|| Arc::new(Semaphore::new(TOTAL_QUEUE_BYTES)))
         .clone()
 }
 
+fn shared_control_budget() -> Arc<Semaphore> {
+    static BUDGET: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    BUDGET
+        .get_or_init(|| Arc::new(Semaphore::new(TOTAL_CONTROL_BYTES)))
+        .clone()
+}
+
 pub fn channel() -> (Sender, Receiver) {
-    channel_with_budget(QUEUE_CAPACITY, shared_budget())
+    channel_with_budget(QUEUE_CAPACITY, shared_queue_budget())
 }
 
 fn channel_with_budget(capacity: usize, budget: Arc<Semaphore>) -> (Sender, Receiver) {
@@ -68,9 +78,10 @@ fn channel_with_budget(capacity: usize, budget: Arc<Semaphore>) -> (Sender, Rece
     )
 }
 
-/// Direct responses share the same budget as queued messages.
+/// Direct responses use a separate bounded reserve so queue saturation can be
+/// reported without letting unrelated queued traffic consume that capacity.
 pub fn reserve(text: &String) -> Result<OwnedSemaphorePermit, SendError> {
-    reserve_from(shared_budget(), text)
+    reserve_from(shared_control_budget(), text)
 }
 
 fn reserve_from(budget: Arc<Semaphore>, text: &String) -> Result<OwnedSemaphorePermit, SendError> {
@@ -93,23 +104,20 @@ impl Sender {
         if *self.close.borrow() || self.sender.is_closed() {
             return Err(SendError::Closed);
         }
-        let reservation = match reserve_from(self.budget.clone(), &text) {
-            Ok(reservation) => reservation,
-            Err(error) => {
-                self.close.send_replace(true);
-                return Err(error);
-            }
-        };
+        // Global saturation is not evidence that this recipient is slow. Reject
+        // the relay, but preserve the healthy connection so unrelated pressure
+        // cannot evict it.
+        let reservation = reserve_from(self.budget.clone(), &text)?;
         let queued = QueuedText {
             text,
             _reservation: reservation,
         };
-        self.sender.try_send(queued).map_err(|error| {
-            self.close.send_replace(true);
-            match error {
-                mpsc::error::TrySendError::Full(_) => SendError::Full,
-                mpsc::error::TrySendError::Closed(_) => SendError::Closed,
+        self.sender.try_send(queued).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => {
+                self.close.send_replace(true);
+                SendError::Full
             }
+            mpsc::error::TrySendError::Closed(_) => SendError::Closed,
         })
     }
 }
@@ -172,7 +180,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn byte_budget_is_shared_and_retained_during_the_write() {
+    async fn aggregate_budget_rejects_a_relay_without_closing_its_healthy_recipient() {
         let bytes = "signal".len() + ITEM_OVERHEAD;
         let budget = Arc::new(Semaphore::new(bytes));
         let (first, mut receiver) = channel_with_budget(2, budget.clone());
@@ -180,11 +188,15 @@ mod tests {
         first.send(message()).unwrap();
         let pending_write = receiver.recv().await.unwrap();
         assert_eq!(budget.available_permits(), 0);
+
         assert_eq!(second.send(message()), Err(SendError::BudgetExhausted));
-        assert!(other.recv().await.is_none());
+        assert!(!*other.close.borrow());
+
         drop(pending_write);
         assert_eq!(budget.available_permits(), bytes);
-        first.send(message()).unwrap();
+        second.send(message()).unwrap();
+        assert_eq!(other.recv().await.unwrap().text, "signal");
+        assert_eq!(budget.available_permits(), bytes);
     }
 
     #[tokio::test]
@@ -204,14 +216,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oversized_messages_are_rejected_before_enqueue() {
+    async fn oversized_messages_are_rejected_before_enqueue_without_closing_the_recipient() {
         let budget = Arc::new(Semaphore::new(TOTAL_QUEUE_BYTES));
         let (sender, mut receiver) = channel_with_budget(1, budget.clone());
         assert_eq!(
             sender.send(Text(Some("x".repeat(MAX_FRAME_BYTES + 1)))),
             Err(SendError::TooLarge)
         );
-        assert!(receiver.recv().await.is_none());
+        assert!(!*receiver.close.borrow());
         assert_eq!(budget.available_permits(), TOTAL_QUEUE_BYTES);
+        sender.send(message()).unwrap();
+        assert_eq!(receiver.recv().await.unwrap().text, "signal");
     }
 }
