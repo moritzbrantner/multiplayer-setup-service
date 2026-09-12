@@ -20,6 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
+      - name: Set up exact Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: ".node-version"
+
+      - name: Prepare exact repository environment
+        run: bash scripts/codex-environment.sh maintenance
+
       - name: Conformance
         uses: moritzbrantner/coding-tooling@54b6ae146fc8795022283012ce1fd58686cd4b9a
         with:
