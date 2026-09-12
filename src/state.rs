@@ -122,7 +122,11 @@ impl RoomStore {
         for _ in 0..MAX_ROOM_CREATION_ATTEMPTS {
             let room_id = generate_room_id().map_err(|_| StoreError::Randomness)?;
             let host_token = generate_capability_token().map_err(|_| StoreError::Randomness)?;
-            let expires_at = now_ms().saturating_add(duration_ms(ttl));
+            let created_at = now_ms();
+            if created_at == u64::MAX {
+                return Err(StoreError::Randomness);
+            }
+            let expires_at = created_at.saturating_add(duration_ms(ttl));
             let host_token_hash = hash_capability_token(&host_token);
 
             let mut inner = self.inner.lock().await;
@@ -337,15 +341,24 @@ fn duration_ms(duration: Duration) -> u64 {
 }
 
 fn now_ms() -> u64 {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
+    system_time_ms(SystemTime::now())
+}
+
+fn system_time_ms(time: SystemTime) -> u64 {
+    match time.duration_since(UNIX_EPOCH) {
         Ok(duration) => u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
-        Err(_) => 0,
+        Err(_) => u64::MAX,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pre_epoch_clock_uses_fail_closed_sentinel() {
+        assert_eq!(system_time_ms(UNIX_EPOCH - Duration::from_secs(1)), u64::MAX);
+    }
 
     #[tokio::test]
     async fn room_can_be_claimed_by_only_one_guest() {
