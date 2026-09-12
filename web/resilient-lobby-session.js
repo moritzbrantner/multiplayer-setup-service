@@ -16,6 +16,7 @@ function toWebSocketUrl(apiBase, websocketPath, participantId) {
 }
 
 async function readJson(response) {
+  response = await response;
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     const message = body?.error?.message ?? `Request failed with ${response.status}`;
