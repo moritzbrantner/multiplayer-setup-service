@@ -21,16 +21,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: ".node-version"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
       - name: Build real signaling service
         run: cargo build --release --locked --bin multiplayer-setup-service
       - name: Install locked browser harness and Chromium
-        working-directory: e2e
         run: |
-          npm ci --ignore-scripts
-          npx --no-install playwright install --with-deps chromium
+          bun install --frozen-lockfile --ignore-scripts
+          bunx playwright install --with-deps chromium
       - name: Install loopback-only TURN fixture
         run: |
           sudo apt-get update
@@ -39,12 +43,12 @@ jobs:
           turnserver --version
       - name: Exercise production modules in isolated browser contexts
         working-directory: e2e
-        run: npm test
+        run: bun run test
       - name: Preserve browser failure and acceptance evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: browser-acceptance-${{ github.sha }}
+          name: browser-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             e2e/results
             e2e/test-results
