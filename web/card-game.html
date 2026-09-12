@@ -3,28 +3,48 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A four-player hidden-hand card game demo built on multiplayer-setup-service lobbies.">
   <title>Four-player color-match card game</title>
   <link rel="stylesheet" href="./common.css">
   <link rel="stylesheet" href="./card-game.css">
 </head>
 <body>
   <main>
-    <nav><a href="./index.html">Demos</a><a href="./pong.html">Pong</a><a href="./arena.html">16-player arena</a></nav>
+    <nav><a href="./index.html">Demos</a><a href="./pong.html">Pong</a><a href="./tic-tac-toe.html">Tic-Tac-Toe</a><a href="./arena.html">16-player arena</a></nav>
+    <p class="eyebrow">Host-validated four-player demo</p>
     <h1>Four-player color-match card game</h1>
-    <p>An UNO-style showcase for hidden hands and host-validated turns. The setup service only connects peers; the host browser owns this demo's deck, hands, turn order, and rule validation.</p>
+    <p class="lead">An UNO-style showcase for hidden hands and host-validated turns. The setup service only connects peers; the host browser owns this demo's deck, hands, turn order, and rule validation.</p>
 
-    <section class="panel" aria-label="Lobby controls">
+    <section class="panel lobby-panel" aria-label="Lobby controls">
+      <div class="lobby-panel-heading">
+        <div>
+          <h2>Lobby</h2>
+          <p class="muted">Up to four players. Start with any 2–4 connected players.</p>
+        </div>
+        <span class="latency-chip" data-lobby-latency data-quality="unknown">Ping —</span>
+      </div>
       <div class="lobby">
-        <button id="host" type="button">Host 4-player lobby</button>
+        <button id="host" class="primary" type="button">Host 4-player lobby</button>
         <span>or</span>
         <label>Lobby code <input id="code" autocomplete="off" placeholder="ABCD-EFGH-JKMN"></label>
         <button id="join" type="button">Join game</button>
       </div>
       <p id="status" class="status" aria-live="polite">Not connected.</p>
-      <p id="lobby-state" class="muted">No lobby yet.</p>
-      <p id="invite" class="muted"></p>
-      <button id="start" type="button" disabled>Start with connected players</button>
-      <p class="muted">The lobby allows up to four players and can start with 2–4 so the demo is testable with fewer devices.</p>
+      <div class="lobby-meta"><span id="lobby-state">No lobby yet.</span></div>
+      <div class="invite-row hidden" data-lobby-invite-row>
+        <div class="invite-code"><span class="muted">Lobby</span><span class="room-code">Join link</span></div>
+        <a id="invite" class="invite-link" data-lobby-invite href="#" rel="nofollow"></a>
+        <button type="button" data-lobby-share disabled>Share invite</button>
+      </div>
+      <div><button id="start" type="button" disabled>Start with connected players</button></div>
+      <section class="lobby-chat" aria-label="Lobby chat">
+        <div class="lobby-chat-head"><strong>Lobby chat</strong><span class="muted">Peer to peer</span></div>
+        <ol class="chat-log" data-lobby-chat-log aria-live="polite"></ol>
+        <form class="chat-form" data-lobby-chat-form>
+          <input data-lobby-chat-input maxlength="500" disabled autocomplete="off" aria-label="Lobby chat message" placeholder="Chat becomes available when a peer connects">
+          <button type="submit" data-lobby-chat-send disabled>Send</button>
+        </form>
+      </section>
     </section>
 
     <section id="game" class="game-shell hidden">
