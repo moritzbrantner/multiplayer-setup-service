@@ -2,6 +2,7 @@ use crate::protocol::{
     LobbyServerMessage, format_room_code, generate_capability_token, generate_participant_id,
     generate_room_id, hash_capability_token, hashes_equal,
 };
+use crate::state::outbox;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{
@@ -9,16 +10,27 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 
 const MAX_ID_CREATION_ATTEMPTS: usize = 8;
 
-pub type LobbyConnectionSender = mpsc::UnboundedSender<LobbyConnectionCommand>;
+pub type LobbyConnectionSender = outbox::Sender;
 
 #[derive(Clone, Debug)]
 pub enum LobbyConnectionCommand {
     Send(LobbyServerMessage),
     Close,
+}
+
+impl outbox::Command for LobbyConnectionCommand {
+    fn into_text(self) -> Option<String> {
+        match self {
+            Self::Send(message) => {
+                Some(serde_json::to_string(&message).expect("lobby message should serialize"))
+            }
+            Self::Close => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -150,9 +162,11 @@ impl LobbyStore {
                 .max(expires_at);
 
             let mut inner = self.inner.lock().await;
-            purge_expired(&mut inner);
             if inner.lobbies.len() >= self.max_lobbies {
-                return Err(LobbyStoreError::Capacity);
+                purge_expired(&mut inner);
+                if inner.lobbies.len() >= self.max_lobbies {
+                    return Err(LobbyStoreError::Capacity);
+                }
             }
             if inner.lobbies.contains_key(&lobby_id) {
                 continue;
@@ -205,7 +219,7 @@ impl LobbyStore {
             let token_hash = hash_capability_token(&participant_token);
 
             let mut inner = self.inner.lock().await;
-            purge_expired(&mut inner);
+            purge_lobby_if_expired(&mut inner, lobby_id);
             let lobby = inner
                 .lobbies
                 .get_mut(lobby_id)
@@ -241,7 +255,7 @@ impl LobbyStore {
 
     pub async fn status(&self, lobby_id: &str) -> Result<LobbyStatus, LobbyStoreError> {
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_lobby_if_expired(&mut inner, lobby_id);
         let lobby = inner
             .lobbies
             .get(lobby_id)
@@ -264,7 +278,7 @@ impl LobbyStore {
     ) -> Result<(), LobbyStoreError> {
         let token_hash = hash_capability_token(token);
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_lobby_if_expired(&mut inner, lobby_id);
         let lobby = inner
             .lobbies
             .get(lobby_id)
@@ -290,7 +304,7 @@ impl LobbyStore {
     ) -> Result<RenewedLobby, LobbyStoreError> {
         let token_hash = hash_capability_token(token);
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_lobby_if_expired(&mut inner, lobby_id);
         let lobby = inner
             .lobbies
             .get_mut(lobby_id)
@@ -336,7 +350,7 @@ impl LobbyStore {
     ) -> Result<LobbyRegistration, LobbyStoreError> {
         let token_hash = hash_capability_token(token);
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_lobby_if_expired(&mut inner, lobby_id);
         let lobby = inner
             .lobbies
             .get_mut(lobby_id)
@@ -433,7 +447,7 @@ impl LobbyStore {
         }
 
         let mut inner = self.inner.lock().await;
-        purge_expired(&mut inner);
+        purge_lobby_if_expired(&mut inner, lobby_id);
         let lobby = inner
             .lobbies
             .get(lobby_id)
@@ -460,6 +474,16 @@ impl LobbyStore {
         let before = inner.lobbies.len();
         purge_expired(&mut inner);
         before - inner.lobbies.len()
+    }
+}
+
+fn purge_lobby_if_expired(inner: &mut Inner, lobby_id: &str) {
+    if inner
+        .lobbies
+        .get(lobby_id)
+        .is_some_and(|lobby| lobby.expires_at <= now_ms())
+    {
+        inner.lobbies.remove(lobby_id);
     }
 }
 
@@ -639,7 +663,7 @@ mod tests {
             .unwrap();
         let joined = store.join_lobby(&created.lobby_id).await.unwrap();
 
-        let (host_sender, _host_receiver) = mpsc::unbounded_channel();
+        let (host_sender, _host_receiver) = outbox::channel();
         store
             .register_connection(
                 &created.lobby_id,
@@ -650,19 +674,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             store
                 .target_sender(
                     &created.lobby_id,
                     &created.participant_id,
                     &joined.participant_id
                 )
-                .await
-                .unwrap_err(),
-            LobbyStoreError::TargetNotConnected
-        );
+                .await,
+            Err(LobbyStoreError::TargetNotConnected)
+        ));
 
-        let (guest_sender, _guest_receiver) = mpsc::unbounded_channel();
+        let (guest_sender, _guest_receiver) = outbox::channel();
         store
             .register_connection(
                 &created.lobby_id,
@@ -683,5 +706,100 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn live_access_does_not_scan_unrelated_expired_lobbies() {
+        let store = LobbyStore::new(4);
+        let expired = store.create_lobby(Duration::ZERO, 4).await.unwrap();
+        let live = store
+            .create_lobby(Duration::from_secs(60), 4)
+            .await
+            .unwrap();
+        store.status(&live.lobby_id).await.unwrap();
+        assert!(store.inner.lock().await.lobbies.contains_key(&expired.lobby_id));
+        assert!(matches!(
+            store.status(&expired.lobby_id).await,
+            Err(LobbyStoreError::LobbyNotFound)
+        ));
+        assert!(!store.inner.lock().await.lobbies.contains_key(&expired.lobby_id));
+    }
+
+    #[tokio::test]
+    async fn every_addressed_operation_rejects_expiry_without_a_sweep() {
+        for operation in 0..6 {
+            let store = LobbyStore::new_with_lifetime_multiplier(4, 3);
+            let created = store
+                .create_lobby(Duration::from_secs(60), 4)
+                .await
+                .unwrap();
+            let joined = store.join_lobby(&created.lobby_id).await.unwrap();
+            store
+                .inner
+                .lock()
+                .await
+                .lobbies
+                .get_mut(&created.lobby_id)
+                .unwrap()
+                .expires_at = 0;
+            let result = match operation {
+                0 => store.status(&created.lobby_id).await.map(|_| ()),
+                1 => store.join_lobby(&created.lobby_id).await.map(|_| ()),
+                2 => {
+                    store
+                        .authenticate(
+                            &created.lobby_id,
+                            &created.participant_id,
+                            &created.participant_token,
+                        )
+                        .await
+                }
+                3 => {
+                    store
+                        .renew_lobby(
+                            &created.lobby_id,
+                            &created.participant_id,
+                            &created.participant_token,
+                            Duration::from_secs(60),
+                        )
+                        .await
+                        .map(|_| ())
+                }
+                4 => {
+                    let (sender, _receiver) = outbox::channel();
+                    store
+                        .register_connection(
+                            &created.lobby_id,
+                            &created.participant_id,
+                            &created.participant_token,
+                            sender,
+                        )
+                        .await
+                        .map(|_| ())
+                }
+                _ => {
+                    store
+                        .target_sender(
+                            &created.lobby_id,
+                            &created.participant_id,
+                            &joined.participant_id,
+                        )
+                        .await
+                        .map(|_| ())
+                }
+            };
+            assert_eq!(result, Err(LobbyStoreError::LobbyNotFound));
+        }
+    }
+
+    #[tokio::test]
+    async fn capacity_pressure_reclaims_expired_lobbies() {
+        let store = LobbyStore::new(1);
+        store.create_lobby(Duration::ZERO, 2).await.unwrap();
+        assert!(store.create_lobby(Duration::from_secs(60), 2).await.is_ok());
+        assert!(matches!(
+            store.create_lobby(Duration::from_secs(60), 2).await,
+            Err(LobbyStoreError::Capacity)
+        ));
     }
 }
