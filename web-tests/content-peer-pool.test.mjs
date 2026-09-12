@@ -325,3 +325,72 @@ test("participant departure tears down its content-only relationship", async () 
   left.close();
   right.close();
 });
+
+test("a replacement signaling socket accepts fresh negotiation and ignores the old socket", async () => {
+  const { bus, sessions } = makeSessions(["11111111", "22222222"]);
+  const session = sessions.get("11111111");
+  const left = makePool(session);
+  const right = makePool(sessions.get("22222222"));
+  const oldSocket = session.signaling;
+  oldSocket.readyState = 3;
+  session.signaling = bus.socket(session.participantId);
+  session.dispatchEvent(new CustomEvent("signaling-changed", { detail: { socket: session.signaling, previousSocket: oldSocket } }));
+  await left.connect("22222222");
+  await flush();
+  assert.equal(left.peers.get("22222222").peer.remoteDescription.type, "answer");
+  assert.equal(oldSocket.sent.length, 0);
+  assert.equal(left.signaling, session.signaling);
+  const current = left.peers.get("22222222");
+  const late = new Event("message");
+  Object.defineProperty(late, "data", { value: JSON.stringify({ type: "signal", from: "22222222", payload: { contentPeer: { v: 1, connectionId: current.connectionId, close: true } } }) });
+  oldSocket.dispatchEvent(late);
+  await flush();
+  assert.equal(left.peers.get("22222222"), current);
+  assert.equal(left.signalChains.size, 0);
+  left.close();
+  right.close();
+});
+
+test("recovery retains ready content links but cancels incomplete negotiation", async () => {
+  const { bus, sessions } = makeSessions(["11111111", "22222222", "33333333"]);
+  const session = sessions.get("11111111");
+  const pool = makePool(session);
+  await pool.connect("22222222");
+  const ready = pool.peers.get("22222222");
+  ready.peer.connect();
+  ready.channel.open();
+  await pool.connect("33333333");
+  const incomplete = pool.peers.get("33333333");
+  session.signaling = bus.socket(session.participantId);
+  session.dispatchEvent(new Event("signaling-changed"));
+  assert.equal(pool.peers.get("22222222"), ready);
+  assert.equal(pool.peers.has("33333333"), false);
+  assert.equal(incomplete.peer.connectionState, "closed");
+  pool.close();
+});
+
+test("late events from retired content links cannot delete their replacements", async () => {
+  const { sessions } = makeSessions(["11111111", "22222222"]);
+  const pool = makePool(sessions.get("11111111"));
+  await pool.connect("22222222");
+  const old = pool.peers.get("22222222");
+  pool.disconnect("22222222");
+  await pool.connect("22222222");
+  const replacement = pool.peers.get("22222222");
+  old.channel.dispatchEvent(new Event("close"));
+  old.peer.dispatchEvent(new Event("connectionstatechange"));
+  assert.equal(pool.peers.get("22222222"), replacement);
+  pool.close();
+});
+
+test("session closure closes its content pool and removes replacement subscriptions", () => {
+  const { bus, sessions } = makeSessions(["11111111", "22222222"]);
+  const session = sessions.get("11111111");
+  const pool = makePool(session);
+  const original = pool.signaling;
+  session.dispatchEvent(new CustomEvent("statechange", { detail: { state: "closed" } }));
+  session.signaling = bus.socket(session.participantId);
+  session.dispatchEvent(new Event("signaling-changed"));
+  assert.equal(pool.closed, true);
+  assert.equal(pool.signaling, original);
+});

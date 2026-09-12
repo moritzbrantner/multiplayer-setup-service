@@ -183,3 +183,7 @@ cargo build --release --locked
 ```
 
 Browser modules/tests and performance guardrails run in the same read-only CI validation workflow. `Cargo.lock` is committed, and CI uses the exact Rust `1.98.0` toolchain.
+
+## Final hardening and browser acceptance
+
+See [final hardening](docs/final-hardening.md) for signaling resource limits, addressed-lobby expiry, content-pool reconnection, session-shared optional upload pacing, real-browser direct/TURN acceptance, and the remaining operator-owned deployment checklist.

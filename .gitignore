@@ -1,3 +1,7 @@
 /target/
 .env
 *.local
+/e2e/node_modules/
+/e2e/results/
+/e2e/test-results/
+/e2e/playwright-report/

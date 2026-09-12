@@ -12,9 +12,8 @@ use protocol::{
     hashes_equal, is_valid_participant_id, is_valid_room_id, normalize_room_id,
     parse_client_message, parse_lobby_client_message,
 };
-use state::{ConnectionCommand, RoomStatusKind, RoomStore, StoreError};
+use state::{ConnectionCommand, RoomStatusKind, RoomStore, StoreError, outbox};
 use std::time::Duration;
-use tokio::sync::mpsc;
 
 #[test]
 fn generated_identifiers_and_capabilities_respect_contracts() {
@@ -216,7 +215,7 @@ async fn room_registration_rejects_wrong_role_capability() {
     let store = RoomStore::new(2);
     let created = store.create_room(Duration::from_secs(60)).await.unwrap();
     let joined = store.join_room(&created.room_id).await.unwrap();
-    let (sender, _receiver) = mpsc::unbounded_channel();
+    let (sender, _receiver) = outbox::channel();
 
     assert!(matches!(
         store
@@ -244,7 +243,7 @@ async fn room_peer_routing_is_bidirectional_only_after_both_connect() {
     let created = store.create_room(Duration::from_secs(60)).await.unwrap();
     let joined = store.join_room(&created.room_id).await.unwrap();
 
-    let (host_sender, mut host_receiver) = mpsc::unbounded_channel();
+    let (host_sender, mut host_receiver) = outbox::channel();
     store
         .register_connection(
             &created.room_id,
@@ -262,7 +261,7 @@ async fn room_peer_routing_is_bidirectional_only_after_both_connect() {
             .is_none()
     );
 
-    let (guest_sender, mut guest_receiver) = mpsc::unbounded_channel();
+    let (guest_sender, mut guest_receiver) = outbox::channel();
     store
         .register_connection(
             &created.room_id,
@@ -279,10 +278,7 @@ async fn room_peer_routing_is_bidirectional_only_after_both_connect() {
         .unwrap()
         .send(ConnectionCommand::Close)
         .unwrap();
-    assert!(matches!(
-        guest_receiver.recv().await,
-        Some(ConnectionCommand::Close)
-    ));
+    assert!(guest_receiver.recv().await.is_none());
 
     store
         .peer_sender(&created.room_id, PeerRole::Guest)
@@ -290,10 +286,7 @@ async fn room_peer_routing_is_bidirectional_only_after_both_connect() {
         .unwrap()
         .send(ConnectionCommand::Close)
         .unwrap();
-    assert!(matches!(
-        host_receiver.recv().await,
-        Some(ConnectionCommand::Close)
-    ));
+    assert!(host_receiver.recv().await.is_none());
 }
 
 #[tokio::test]
@@ -302,7 +295,7 @@ async fn stale_room_disconnect_cannot_remove_a_replacement_connection() {
     let created = store.create_room(Duration::from_secs(60)).await.unwrap();
     let joined = store.join_room(&created.room_id).await.unwrap();
 
-    let (guest_sender, _guest_receiver) = mpsc::unbounded_channel();
+    let (guest_sender, _guest_receiver) = outbox::channel();
     store
         .register_connection(
             &created.room_id,
@@ -313,7 +306,7 @@ async fn stale_room_disconnect_cannot_remove_a_replacement_connection() {
         .await
         .unwrap();
 
-    let (first_sender, _first_receiver) = mpsc::unbounded_channel();
+    let (first_sender, _first_receiver) = outbox::channel();
     let first = store
         .register_connection(
             &created.room_id,
@@ -324,7 +317,7 @@ async fn stale_room_disconnect_cannot_remove_a_replacement_connection() {
         .await
         .unwrap();
 
-    let (replacement_sender, _replacement_receiver) = mpsc::unbounded_channel();
+    let (replacement_sender, _replacement_receiver) = outbox::channel();
     let replacement = store
         .register_connection(
             &created.room_id,
@@ -509,7 +502,7 @@ async fn lobby_registration_reports_only_connected_participants_in_sorted_order(
     let second = store.join_lobby(&created.lobby_id).await.unwrap();
     let third = store.join_lobby(&created.lobby_id).await.unwrap();
 
-    let (host_sender, _host_receiver) = mpsc::unbounded_channel();
+    let (host_sender, _host_receiver) = outbox::channel();
     let host_registration = store
         .register_connection(
             &created.lobby_id,
@@ -524,7 +517,7 @@ async fn lobby_registration_reports_only_connected_participants_in_sorted_order(
         vec![created.participant_id.clone()]
     );
 
-    let (third_sender, _third_receiver) = mpsc::unbounded_channel();
+    let (third_sender, _third_receiver) = outbox::channel();
     let registration = store
         .register_connection(
             &created.lobby_id,
@@ -551,7 +544,7 @@ async fn stale_lobby_disconnect_cannot_remove_a_replacement_connection() {
         .unwrap();
     let joined = store.join_lobby(&created.lobby_id).await.unwrap();
 
-    let (host_sender, _host_receiver) = mpsc::unbounded_channel();
+    let (host_sender, _host_receiver) = outbox::channel();
     store
         .register_connection(
             &created.lobby_id,
@@ -562,7 +555,7 @@ async fn stale_lobby_disconnect_cannot_remove_a_replacement_connection() {
         .await
         .unwrap();
 
-    let (first_sender, _first_receiver) = mpsc::unbounded_channel();
+    let (first_sender, _first_receiver) = outbox::channel();
     let first = store
         .register_connection(
             &created.lobby_id,
@@ -573,7 +566,7 @@ async fn stale_lobby_disconnect_cannot_remove_a_replacement_connection() {
         .await
         .unwrap();
 
-    let (replacement_sender, _replacement_receiver) = mpsc::unbounded_channel();
+    let (replacement_sender, _replacement_receiver) = outbox::channel();
     let replacement = store
         .register_connection(
             &created.lobby_id,
@@ -632,7 +625,7 @@ async fn lobby_disconnect_notifies_every_other_connected_participant() {
         (&second.participant_id, &second.participant_token),
         (&third.participant_id, &third.participant_token),
     ] {
-        let (sender, _receiver) = mpsc::unbounded_channel();
+        let (sender, _receiver) = outbox::channel();
         registrations.push(
             store
                 .register_connection(&created.lobby_id, id, token, sender)
@@ -678,21 +671,24 @@ async fn targeted_routing_rejects_self_unknown_sender_unknown_target_and_disconn
                 &created.participant_id
             )
             .await
-            .unwrap_err(),
+            .err()
+            .expect("self routing must fail"),
         LobbyStoreError::ParticipantNotFound
     );
     assert_eq!(
         store
             .target_sender(&created.lobby_id, &unknown, &joined.participant_id)
             .await
-            .unwrap_err(),
+            .err()
+            .expect("unknown sender must fail"),
         LobbyStoreError::ParticipantNotFound
     );
     assert_eq!(
         store
             .target_sender(&created.lobby_id, &created.participant_id, &unknown)
             .await
-            .unwrap_err(),
+            .err()
+            .expect("unknown target must fail"),
         LobbyStoreError::ParticipantNotFound
     );
     assert_eq!(
@@ -703,7 +699,8 @@ async fn targeted_routing_rejects_self_unknown_sender_unknown_target_and_disconn
                 &joined.participant_id
             )
             .await
-            .unwrap_err(),
+            .err()
+            .expect("disconnected target must fail"),
         LobbyStoreError::TargetNotConnected
     );
 }
@@ -718,7 +715,7 @@ async fn targeted_routing_delivers_to_exactly_one_requested_connection() {
     let second = store.join_lobby(&created.lobby_id).await.unwrap();
     let third = store.join_lobby(&created.lobby_id).await.unwrap();
 
-    let (host_sender, _host_receiver) = mpsc::unbounded_channel();
+    let (host_sender, _host_receiver) = outbox::channel();
     store
         .register_connection(
             &created.lobby_id,
@@ -729,7 +726,7 @@ async fn targeted_routing_delivers_to_exactly_one_requested_connection() {
         .await
         .unwrap();
 
-    let (second_sender, mut second_receiver) = mpsc::unbounded_channel();
+    let (second_sender, mut second_receiver) = outbox::channel();
     store
         .register_connection(
             &created.lobby_id,
@@ -740,7 +737,7 @@ async fn targeted_routing_delivers_to_exactly_one_requested_connection() {
         .await
         .unwrap();
 
-    let (third_sender, mut third_receiver) = mpsc::unbounded_channel();
+    let (third_sender, mut third_receiver) = outbox::channel();
     store
         .register_connection(
             &created.lobby_id,
@@ -764,16 +761,16 @@ async fn targeted_routing_delivers_to_exactly_one_requested_connection() {
         }))
         .unwrap();
 
-    assert!(matches!(
-        second_receiver.recv().await,
-        Some(LobbyConnectionCommand::Send(LobbyServerMessage::Pong {
-            nonce: Some(ref nonce)
-        })) if nonce == "targeted"
-    ));
-    assert!(matches!(
-        third_receiver.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
+    let delivered = second_receiver.recv().await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&delivered.text).unwrap(),
+        serde_json::json!({"type": "pong", "nonce": "targeted"})
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(1), third_receiver.recv())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -785,7 +782,7 @@ async fn disconnected_lobby_member_can_reconnect_with_the_same_capability() {
         .unwrap();
     let joined = store.join_lobby(&created.lobby_id).await.unwrap();
 
-    let (sender, _receiver) = mpsc::unbounded_channel();
+    let (sender, _receiver) = outbox::channel();
     let first = store
         .register_connection(
             &created.lobby_id,
@@ -814,7 +811,7 @@ async fn disconnected_lobby_member_can_reconnect_with_the_same_capability() {
             .is_ok()
     );
 
-    let (replacement_sender, _replacement_receiver) = mpsc::unbounded_channel();
+    let (replacement_sender, _replacement_receiver) = outbox::channel();
     assert!(
         store
             .register_connection(
@@ -927,7 +924,7 @@ async fn copied_runtime_metadata_and_cleanup_paths_are_covered() {
     let created_room = rooms.create_room(Duration::from_secs(60)).await.unwrap();
     let joined_room = rooms.join_room(&created_room.room_id).await.unwrap();
 
-    let (host_sender, _host_receiver) = mpsc::unbounded_channel();
+    let (host_sender, _host_receiver) = outbox::channel();
     rooms
         .register_connection(
             &created_room.room_id,
@@ -937,7 +934,7 @@ async fn copied_runtime_metadata_and_cleanup_paths_are_covered() {
         )
         .await
         .unwrap();
-    let (guest_sender, _guest_receiver) = mpsc::unbounded_channel();
+    let (guest_sender, _guest_receiver) = outbox::channel();
     let guest_registration = rooms
         .register_connection(
             &created_room.room_id,
@@ -955,7 +952,7 @@ async fn copied_runtime_metadata_and_cleanup_paths_are_covered() {
         .create_lobby(Duration::from_secs(60), 4)
         .await
         .unwrap();
-    let (participant_sender, _participant_receiver) = mpsc::unbounded_channel();
+    let (participant_sender, _participant_receiver) = outbox::channel();
     let registration = lobbies
         .register_connection(
             &created_lobby.lobby_id,
@@ -970,4 +967,6 @@ async fn copied_runtime_metadata_and_cleanup_paths_are_covered() {
         created_lobby.host_participant_id
     );
     assert_eq!(lobbies.cleanup_expired().await, 0);
+    let direct_response = "direct response".to_owned();
+    drop(outbox::reserve(&direct_response).unwrap());
 }
