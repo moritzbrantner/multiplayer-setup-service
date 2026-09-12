@@ -12,7 +12,7 @@
 
 - Use the coding-tooling Pages surface for structural preflight when it can observe the repository; local/CI convergence evidence remains authoritative for execution and full-source findings.
 - Run cheap checks before broader checks. The canonical capability mapping is in `.coding-tooling.json`.
-- Keep Node and Rust toolchains exact. `web/.node-version` and `e2e/.node-version` mirror the repository Node pin because those directories are independently discoverable package components.
+- Keep Node, Bun, and Rust toolchains exact. `package.json` and `bun.lock` define the JavaScript package-manager state; `web/.node-version` and `e2e/.node-version` mirror the repository Node pin because those directories are independently discoverable package components.
 - Preserve exact-head evidence. Missing, skipped, stale, or earlier-head CI is not green evidence for the current revision.
 - Do not suppress or baseline a deterministic finding merely to make convergence green. Fix the repository-owned cause, or leave the finding visible when the detector boundary cannot prove the repository behavior.
 
