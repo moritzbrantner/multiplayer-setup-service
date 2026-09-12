@@ -144,34 +144,91 @@ export class ResilientLobbySession extends EventTarget {
     this.reconnectAttempt = 0;
     this.reconnectTimer = null;
     this.reconnectInFlight = false;
+    this.setupGeneration = 0;
+    this.setupInFlight = false;
+    this.established = false;
   }
 
   async host(maxParticipants = 16) {
     if (!Number.isInteger(maxParticipants) || maxParticipants < 2 || maxParticipants > 16) {
       throw new Error("Lobby size must be between 2 and 16");
     }
-    const lobby = await readJson(
-      await fetch(new URL("/lobbies", this.apiBase), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ maxParticipants }),
-      }),
+    return this.#runInitialSetup(() =>
+      readJson(
+        fetch(new URL("/lobbies", this.apiBase), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ maxParticipants }),
+        }),
+      ),
     );
-    this.#adoptLobby(lobby);
-    await this.#connectSignaling(lobby.websocketPath);
-    this.#emit("lobby", this.#lobbyDetail());
-    return lobby;
   }
 
   async join(lobbyCode) {
     const normalized = String(lobbyCode ?? "").trim();
     if (!normalized) throw new Error("Enter a lobby code");
     const path = `/lobbies/${encodeURIComponent(normalized)}/join`;
-    const lobby = await readJson(await fetch(new URL(path, this.apiBase), { method: "POST" }));
-    this.#adoptLobby(lobby);
-    await this.#connectSignaling(lobby.websocketPath);
-    this.#emit("lobby", this.#lobbyDetail());
-    return lobby;
+    return this.#runInitialSetup(() => readJson(fetch(new URL(path, this.apiBase), { method: "POST" })));
+  }
+
+  async #runInitialSetup(loadLobby) {
+    const generation = this.#beginInitialSetup();
+    try {
+      const lobby = await loadLobby();
+      this.#assertInitialSetupActive(generation);
+      this.#adoptLobby(lobby);
+      await this.#connectSignaling(lobby.websocketPath);
+      this.#assertInitialSetupActive(generation);
+      if (this.signaling?.readyState !== WebSocket.OPEN) {
+        throw new Error("Lobby signaling closed during initial setup");
+      }
+      this.setupInFlight = false;
+      this.established = true;
+      this.#emit("lobby", this.#lobbyDetail());
+      return lobby;
+    } catch (error) {
+      this.#abortInitialSetup(generation);
+      throw error;
+    }
+  }
+
+  #beginInitialSetup() {
+    if (this.closed) throw new Error("Lobby session is closed");
+    if (this.setupInFlight || this.established) throw new Error("Lobby session setup has already started");
+    this.setupGeneration += 1;
+    this.setupInFlight = true;
+    return this.setupGeneration;
+  }
+
+  #assertInitialSetupActive(generation) {
+    if (this.closed || !this.setupInFlight || this.setupGeneration !== generation) {
+      throw new Error("Lobby session setup was cancelled");
+    }
+  }
+
+  #abortInitialSetup(generation) {
+    if (this.setupGeneration !== generation) return;
+    this.setupInFlight = false;
+    this.established = false;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    const socket = this.signaling;
+    this.signaling = null;
+    socket?.close();
+    for (const link of this.links.values()) this.#closeLink(link);
+    this.links.clear();
+    this.participants.clear();
+    this.#clearLobbyIdentity();
+  }
+
+  #clearLobbyIdentity() {
+    this.lobbyId = null;
+    this.displayCode = null;
+    this.participantId = null;
+    this.hostParticipantId = null;
+    this.participantToken = null;
+    this.maxParticipants = null;
+    this.websocketPath = null;
   }
 
   setTurnIceServers(turnIceServers) {
@@ -252,14 +309,21 @@ export class ResilientLobbySession extends EventTarget {
   }
 
   close() {
+    const cancelingInitialSetup = this.setupInFlight && !this.established;
+    this.setupGeneration += 1;
+    this.setupInFlight = false;
+    this.established = false;
     this.closed = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    this.signaling?.close();
+    const socket = this.signaling;
+    this.signaling = null;
+    socket?.close();
     for (const link of this.links.values()) this.#closeLink(link);
     this.links.clear();
     this.participants.clear();
     this.seedContentIds = [];
+    if (cancelingInitialSetup) this.#clearLobbyIdentity();
     this.#emit("statechange", { state: "closed" });
   }
 
@@ -284,7 +348,7 @@ export class ResilientLobbySession extends EventTarget {
       this.#handleSignalingMessage(event).catch((error) => this.#fail(error));
     });
     socket.addEventListener("close", () => {
-      if (this.signaling !== socket || this.closed) return;
+      if (this.signaling !== socket || this.closed || !this.established) return;
       this.#emit("signaling-closed", { attempt: this.reconnectAttempt });
       this.#scheduleReconnect();
     });
@@ -301,17 +365,23 @@ export class ResilientLobbySession extends EventTarget {
         cleanup();
         reject(new Error("Could not connect to lobby signaling"));
       };
+      const onClose = () => {
+        cleanup();
+        reject(new Error("Lobby signaling closed before opening"));
+      };
       const cleanup = () => {
         socket.removeEventListener("open", onOpen);
         socket.removeEventListener("error", onError);
+        socket.removeEventListener("close", onClose);
       };
       socket.addEventListener("open", onOpen, { once: true });
       socket.addEventListener("error", onError, { once: true });
+      socket.addEventListener("close", onClose, { once: true });
     });
   }
 
   #scheduleReconnect() {
-    if (this.closed || this.reconnectTimer || this.reconnectInFlight || !this.websocketPath) return;
+    if (this.closed || !this.established || this.reconnectTimer || this.reconnectInFlight || !this.websocketPath) return;
     if (this.reconnectAttempt >= this.reconnectMaxAttempts) {
       this.#emit("statechange", { state: "reconnect-exhausted", attempts: this.reconnectAttempt });
       return;
