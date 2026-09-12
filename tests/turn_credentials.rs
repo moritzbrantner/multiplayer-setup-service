@@ -174,10 +174,7 @@ fn turn_credentials_require_the_matching_participant_capability() {
 
     let (status, response_body) = request(service.port, "POST", &path, Some(&body), &[]).unwrap();
     assert_eq!(status, 401);
-    assert_eq!(
-        json(&response_body)["error"]["code"],
-        "invalid-credentials"
-    );
+    assert_eq!(json(&response_body)["error"]["code"], "invalid-credentials");
 
     let wrong = format!("Bearer {}", "f".repeat(64));
     let (status, response_body) = request(
@@ -189,10 +186,7 @@ fn turn_credentials_require_the_matching_participant_capability() {
     )
     .unwrap();
     assert_eq!(status, 401);
-    assert_eq!(
-        json(&response_body)["error"]["code"],
-        "invalid-credentials"
-    );
+    assert_eq!(json(&response_body)["error"]["code"], "invalid-credentials");
 }
 
 #[test]
@@ -214,8 +208,5 @@ fn authenticated_request_fails_closed_when_turn_is_not_configured() {
     )
     .unwrap();
     assert_eq!(status, 503);
-    assert_eq!(
-        json(&response_body)["error"]["code"],
-        "turn-not-configured"
-    );
+    assert_eq!(json(&response_body)["error"]["code"], "turn-not-configured");
 }
