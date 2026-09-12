@@ -68,6 +68,31 @@ if [[ -n "$desired_node" ]]; then
   fi
 fi
 
+desired_bun="$(python3 - "$root/package.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+if path.is_file():
+    manager = json.loads(path.read_text()).get('packageManager', '')
+    if manager.startswith('bun@'):
+        print(manager.removeprefix('bun@'))
+PY
+)"
+if [[ -n "$desired_bun" ]]; then
+  if ! [[ "$desired_bun" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf 'packageManager must use an exact Bun version, got bun@%s\n' "$desired_bun" >&2
+    exit 2
+  fi
+  if ! command -v bun >/dev/null 2>&1; then
+    printf 'Bun %s is required but is not installed; provision the exact version with a trusted pinned environment mechanism before running this script\n' "$desired_bun" >&2
+    exit 2
+  fi
+  observed_bun="$(bun --version)"
+  if [[ "$observed_bun" != "$desired_bun" ]]; then
+    printf 'Bun preflight mismatch: expected %s, got %s\n' "$desired_bun" "$observed_bun" >&2
+    exit 1
+  fi
+fi
+
 rust_toolchain="$(python3 - "$root/rust-toolchain.toml" <<'PY'
 import pathlib, sys, tomllib
 path = pathlib.Path(sys.argv[1])
@@ -120,6 +145,13 @@ if [[ -n "$desired_node" ]]; then
   observed_node="${observed_node#v}"
   if [[ "$observed_node" != "$desired_node" ]]; then
     printf 'Node preflight mismatch: expected %s, got %s\n' "$desired_node" "$observed_node" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$desired_bun" ]]; then
+  observed_bun="$(bun --version)"
+  if [[ "$observed_bun" != "$desired_bun" ]]; then
+    printf 'Bun preflight mismatch: expected %s, got %s\n' "$desired_bun" "$observed_bun" >&2
     exit 1
   fi
 fi
