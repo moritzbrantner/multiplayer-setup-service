@@ -1,6 +1,7 @@
 mod lobby;
 mod protocol;
 mod state;
+mod turn;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -255,6 +256,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/lobbies/{lobby_id}", get(lobby_status))
         .route("/lobbies/{lobby_id}/join", post(join_lobby))
         .route("/lobbies/{lobby_id}/renew", post(renew_lobby))
+        .route(
+            "/lobbies/{lobby_id}/turn-credentials",
+            post(turn::issue_turn_credentials),
+        )
         .route("/lobbies/{lobby_id}/connect", get(connect_lobby))
         .layer(cors)
         .with_state(state);
