@@ -31,6 +31,16 @@
       ],
       "test": ["cargo", "test", "--all-targets", "--all-features", "--locked"],
       "build": ["cargo", "build", "--locked"],
+      "benchmark:smoke": [
+        "cargo",
+        "test",
+        "--release",
+        "--test",
+        "performance_guardrails",
+        "--locked",
+        "--",
+        "--nocapture"
+      ],
       "profile:runtime": [
         "cargo",
         "run",
