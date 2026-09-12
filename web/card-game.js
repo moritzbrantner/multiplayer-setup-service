@@ -1,4 +1,5 @@
 import { GameCommands } from "./game-commands.js";
+import { LobbyExperience, readInviteJoin } from "./lobby-experience.js";
 import { LobbySession } from "./lobby-session.js";
 import {
   applyCardIntent,
@@ -10,12 +11,12 @@ import {
 const CARD_INTENT_COMMAND = "card.intent";
 const params = new URLSearchParams(window.location.search);
 const apiBase = params.get("api") || "http://127.0.0.1:8787";
+const inviteJoin = readInviteJoin({ search: window.location.search, codeParam: "lobby" });
 const hostButton = document.querySelector("#host");
 const joinButton = document.querySelector("#join");
 const codeInput = document.querySelector("#code");
 const startButton = document.querySelector("#start");
 const status = document.querySelector("#status");
-const invite = document.querySelector("#invite");
 const lobbyState = document.querySelector("#lobby-state");
 const game = document.querySelector("#game");
 const topCard = document.querySelector("#top-card");
@@ -28,11 +29,11 @@ const forgeButton = document.querySelector("#forge-card");
 const replayButton = document.querySelector("#replay-intent");
 const securityResult = document.querySelector("#security-result");
 
-const queryLobby = params.get("lobby");
-if (queryLobby) codeInput.value = queryLobby;
+if (inviteJoin.code) codeInput.value = inviteJoin.code;
 
 let session = null;
 let commands = null;
+let lobbyExperience = null;
 let authoritativeState = null;
 let currentView = null;
 let localSequence = 0;
@@ -207,10 +208,6 @@ function wireSession(current, currentCommands) {
 
   current.addEventListener("lobby", () => {
     codeInput.value = current.displayCode;
-    const inviteUrl = new URL(window.location.href);
-    inviteUrl.searchParams.set("lobby", current.displayCode);
-    inviteUrl.searchParams.set("api", current.apiBase);
-    invite.textContent = `Invite: ${inviteUrl}`;
     status.textContent = `Lobby ${current.displayCode} created/joined. Waiting for players…`;
     hostButton.disabled = true;
     joinButton.disabled = true;
@@ -248,6 +245,8 @@ function wireSession(current, currentCommands) {
 }
 
 function createSession() {
+  lobbyExperience?.close();
+  lobbyExperience = null;
   commands?.close();
   commands = null;
   session?.close();
@@ -256,6 +255,12 @@ function createSession() {
   localSequence = 0;
   lastIntent = null;
   session = new LobbySession({ apiBase, topology: "host" });
+  lobbyExperience = new LobbyExperience({
+    session,
+    root: document,
+    codeParam: "lobby",
+    inviteTitle: "Join my color-match card game",
+  });
   commands = new GameCommands({ session });
   wireSession(session, commands);
   return session;
@@ -306,7 +311,9 @@ replayButton.addEventListener("click", () => {
 });
 
 window.addEventListener("beforeunload", () => {
+  lobbyExperience?.close();
   commands?.close();
   session?.close();
 });
 renderLobbyState();
+if (inviteJoin.autoJoin) queueMicrotask(() => joinButton.click());
