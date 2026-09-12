@@ -1,0 +1,53 @@
+name: Repository Convergence
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: convergence-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  converge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Conformance
+        uses: moritzbrantner/coding-tooling@54b6ae146fc8795022283012ce1fd58686cd4b9a
+        with:
+          operation: conformance
+          bun-version: 1.4.0
+          report-path: .artifacts/coding-tooling/conformance.json
+
+      - name: Foundation audit
+        if: ${{ always() }}
+        uses: moritzbrantner/coding-tooling@54b6ae146fc8795022283012ce1fd58686cd4b9a
+        with:
+          operation: foundation
+          bun-version: 1.4.0
+          report-path: .artifacts/coding-tooling/foundation.json
+
+      - name: Deterministic findings
+        if: ${{ always() }}
+        uses: moritzbrantner/coding-tooling@54b6ae146fc8795022283012ce1fd58686cd4b9a
+        with:
+          operation: findings
+          bun-version: 1.4.0
+          report-path: .artifacts/coding-tooling/findings.json
+
+      - name: Upload convergence evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: repository-convergence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: .artifacts/coding-tooling
+          if-no-files-found: error
+          retention-days: 14
