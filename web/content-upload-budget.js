@@ -58,7 +58,7 @@ export class ContentUploadBudget {
     else this.pauseController = new AbortController();
   }
 
-  async consume(bytes, { signal } = {}) {
+  reserve(bytes, { signal } = {}) {
     if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.burstBytes) {
       throw new Error("Content frame exceeds the upload burst budget");
     }
@@ -66,24 +66,58 @@ export class ContentUploadBudget {
     if (this.pendingSends >= this.maxPendingSends || bytes > this.maxPendingBytes - this.pendingBytes) {
       throw new Error("Content upload waiting budget is exhausted");
     }
+
     const pauseSignal = this.pauseController.signal;
+    const signals = Object.freeze([pauseSignal, signal].filter(Boolean));
+    let released = false;
+    let consuming = false;
+    let consumed = false;
     this.pendingSends += 1;
     this.pendingBytes += bytes;
-    try {
-      while (true) {
-        if (this.paused || pauseSignal.aborted || signal?.aborted) throw abortError();
-        const now = Math.max(this.updated, this.#time());
-        this.tokens = Math.min(this.burstBytes, this.tokens + (now - this.updated) * this.bytesPerSecond / 1000);
-        this.updated = now;
-        if (this.tokens >= bytes) {
-          this.tokens -= bytes;
-          return;
+
+    return Object.freeze({
+      signals,
+      consume: async () => {
+        if (released) throw new Error("Content upload reservation was released");
+        if (consumed) throw new Error("Content upload reservation was already consumed");
+        consumed = true;
+        consuming = true;
+        try {
+          await this.#consumeReserved(bytes, signals);
+        } finally {
+          consuming = false;
         }
-        await delay(Math.ceil((bytes - this.tokens) * 1000 / this.bytesPerSecond), [pauseSignal, signal]);
-      }
+      },
+      release: () => {
+        if (released) return;
+        if (consuming) throw new Error("Content upload reservation cannot be released while consuming");
+        released = true;
+        this.pendingSends -= 1;
+        this.pendingBytes -= bytes;
+      },
+    });
+  }
+
+  async consume(bytes, { signal } = {}) {
+    const reservation = this.reserve(bytes, { signal });
+    try {
+      await reservation.consume();
     } finally {
-      this.pendingSends -= 1;
-      this.pendingBytes -= bytes;
+      reservation.release();
+    }
+  }
+
+  async #consumeReserved(bytes, signals) {
+    while (true) {
+      if (this.paused || signals.some((signal) => signal?.aborted)) throw abortError();
+      const now = Math.max(this.updated, this.#time());
+      this.tokens = Math.min(this.burstBytes, this.tokens + (now - this.updated) * this.bytesPerSecond / 1000);
+      this.updated = now;
+      if (this.tokens >= bytes) {
+        this.tokens -= bytes;
+        return;
+      }
+      await delay(Math.ceil((bytes - this.tokens) * 1000 / this.bytesPerSecond), signals);
     }
   }
 

@@ -24,6 +24,25 @@ test("aggregate tokens cannot be spent twice by concurrent peers", async () => {
   assert.equal(budget.tokens, 0);
 });
 
+test("reservations hold bounded capacity before token pacing begins", async () => {
+  const budget = new ContentUploadBudget({
+    bytesPerSecond: 1,
+    burstBytes: 4,
+    maxPendingBytes: 4,
+    maxPendingSends: 1,
+  });
+  const reservation = budget.reserve(4);
+  assert.equal(budget.pendingSends, 1);
+  assert.equal(budget.pendingBytes, 4);
+  assert.throws(() => budget.reserve(1), /waiting budget/);
+
+  budget.setPaused(true);
+  await assert.rejects(reservation.consume(), /cancelled or paused/);
+  reservation.release();
+  assert.equal(budget.pendingSends, 0);
+  assert.equal(budget.pendingBytes, 0);
+});
+
 test("pausing cancels bounded waiters and prevents new bulk sends", async () => {
   const budget = new ContentUploadBudget({ bytesPerSecond: 1, burstBytes: 4, maxPendingBytes: 4, maxPendingSends: 1 });
   await budget.consume(4);
