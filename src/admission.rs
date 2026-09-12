@@ -47,8 +47,8 @@ impl Bucket {
 
     fn allow(&mut self, cost: u32, now: Instant) -> bool {
         let elapsed = now.saturating_duration_since(self.updated).as_secs_f64();
-        self.tokens = (self.tokens + elapsed * f64::from(self.per_second))
-            .min(f64::from(self.capacity));
+        self.tokens =
+            (self.tokens + elapsed * f64::from(self.per_second)).min(f64::from(self.capacity));
         self.updated = now;
         if f64::from(cost) > self.tokens {
             return false;

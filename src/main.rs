@@ -416,7 +416,6 @@ async fn create_lobby(
                 expires_at: created.expires_at,
                 max_expires_at: created.max_expires_at,
                 max_participants: created.max_participants,
-                websocket_path: format!("/lobbies/{}/connect", created.lobby_id),
             }),
         )
             .into_response(),

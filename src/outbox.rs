@@ -73,10 +73,7 @@ pub fn reserve(text: &String) -> Result<OwnedSemaphorePermit, SendError> {
     reserve_from(shared_budget(), text)
 }
 
-fn reserve_from(
-    budget: Arc<Semaphore>,
-    text: &String,
-) -> Result<OwnedSemaphorePermit, SendError> {
+fn reserve_from(budget: Arc<Semaphore>, text: &String) -> Result<OwnedSemaphorePermit, SendError> {
     if text.len() > MAX_FRAME_BYTES {
         return Err(SendError::TooLarge);
     }

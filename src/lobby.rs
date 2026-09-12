@@ -717,12 +717,26 @@ mod tests {
             .await
             .unwrap();
         store.status(&live.lobby_id).await.unwrap();
-        assert!(store.inner.lock().await.lobbies.contains_key(&expired.lobby_id));
+        assert!(
+            store
+                .inner
+                .lock()
+                .await
+                .lobbies
+                .contains_key(&expired.lobby_id)
+        );
         assert!(matches!(
             store.status(&expired.lobby_id).await,
             Err(LobbyStoreError::LobbyNotFound)
         ));
-        assert!(!store.inner.lock().await.lobbies.contains_key(&expired.lobby_id));
+        assert!(
+            !store
+                .inner
+                .lock()
+                .await
+                .lobbies
+                .contains_key(&expired.lobby_id)
+        );
     }
 
     #[tokio::test]
@@ -754,17 +768,15 @@ mod tests {
                         )
                         .await
                 }
-                3 => {
-                    store
-                        .renew_lobby(
-                            &created.lobby_id,
-                            &created.participant_id,
-                            &created.participant_token,
-                            Duration::from_secs(60),
-                        )
-                        .await
-                        .map(|_| ())
-                }
+                3 => store
+                    .renew_lobby(
+                        &created.lobby_id,
+                        &created.participant_id,
+                        &created.participant_token,
+                        Duration::from_secs(60),
+                    )
+                    .await
+                    .map(|_| ()),
                 4 => {
                     let (sender, _receiver) = outbox::channel();
                     store
@@ -777,16 +789,14 @@ mod tests {
                         .await
                         .map(|_| ())
                 }
-                _ => {
-                    store
-                        .target_sender(
-                            &created.lobby_id,
-                            &created.participant_id,
-                            &joined.participant_id,
-                        )
-                        .await
-                        .map(|_| ())
-                }
+                _ => store
+                    .target_sender(
+                        &created.lobby_id,
+                        &created.participant_id,
+                        &joined.participant_id,
+                    )
+                    .await
+                    .map(|_| ()),
             };
             assert_eq!(result, Err(LobbyStoreError::LobbyNotFound));
         }
