@@ -5,7 +5,7 @@
     "fast": ["format:check", "lint", "test", "build"],
     "integration": ["test:integration"],
     "e2e": ["test:e2e"],
-    "performance": ["benchmark:smoke", "profile:runtime"]
+    "performance": ["benchmark:smoke", "benchmark", "profile:runtime"]
   },
   "requiredCapabilities": [
     "format:check",
@@ -15,7 +15,7 @@
     "test:integration",
     "test:e2e"
   ],
-  "optionalCapabilities": ["benchmark:smoke", "profile:runtime"],
+  "optionalCapabilities": ["benchmark:smoke", "benchmark", "profile:runtime"],
   "capabilityCommands": {
     ".": {
       "format:check": ["cargo", "fmt", "--all", "--", "--check"],
@@ -41,6 +41,16 @@
         "--",
         "--nocapture"
       ],
+      "benchmark": [
+        "cargo",
+        "test",
+        "--release",
+        "--test",
+        "performance_guardrails",
+        "--locked",
+        "--",
+        "--nocapture"
+      ],
       "profile:runtime": [
         "cargo",
         "run",
@@ -51,11 +61,11 @@
       ]
     },
     "web": {
-      "test:integration": ["npm", "run", "test"],
-      "benchmark:smoke": ["npm", "run", "test:perf"]
+      "test:integration": ["bun", "run", "test"],
+      "benchmark:smoke": ["bun", "run", "test:perf"]
     },
     "e2e": {
-      "test:e2e": ["npm", "test"]
+      "test:e2e": ["bun", "run", "test"]
     }
   }
 }
