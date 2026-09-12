@@ -321,7 +321,7 @@ async fn join_room(State(state): State<AppState>, Path(raw_room_id): Path<String
     match state.rooms.join_room(&room_id).await {
         Ok(joined) => Json(JoinRoomResponse {
             websocket_path: format!("/rooms/{room_id}/connect"),
-            display_code: format_room_code(&room_id).expect("validated room ID should format"),
+            display_code: display_room_code(&room_id),
             room_id,
             role: PeerRole::Guest,
             guest_token: joined.guest_token,
@@ -343,7 +343,7 @@ async fn room_status(State(state): State<AppState>, Path(raw_room_id): Path<Stri
 
     match state.rooms.status(&room_id).await {
         Ok(status) => Json(StatusResponse {
-            display_code: format_room_code(&room_id).expect("validated room ID should format"),
+            display_code: display_room_code(&room_id),
             room_id,
             status: status.status,
             expires_at: status.expires_at,
@@ -438,7 +438,7 @@ async fn join_lobby(State(state): State<AppState>, Path(raw_lobby_id): Path<Stri
     match state.lobbies.join_lobby(&lobby_id).await {
         Ok(joined) => Json(JoinLobbyResponse {
             websocket_path: format!("/lobbies/{lobby_id}/connect"),
-            display_code: format_room_code(&lobby_id).expect("validated lobby ID should format"),
+            display_code: display_room_code(&lobby_id),
             lobby_id,
             participant_id: joined.participant_id,
             participant_token: joined.participant_token,
@@ -463,7 +463,7 @@ async fn lobby_status(State(state): State<AppState>, Path(raw_lobby_id): Path<St
 
     match state.lobbies.status(&lobby_id).await {
         Ok(status) => Json(LobbyStatusResponse {
-            display_code: format_room_code(&lobby_id).expect("validated lobby ID should format"),
+            display_code: display_room_code(&lobby_id),
             lobby_id,
             host_participant_id: status.host_participant_id,
             participant_count: status.participant_count,
@@ -508,7 +508,7 @@ async fn renew_lobby(
         .await
     {
         Ok(renewed) => Json(RenewLobbyResponse {
-            display_code: format_room_code(&lobby_id).expect("validated lobby ID should format"),
+            display_code: display_room_code(&lobby_id),
             lobby_id,
             expires_at: renewed.expires_at,
             max_expires_at: renewed.max_expires_at,
@@ -572,6 +572,13 @@ async fn connect_lobby(
 fn validated_room_id(raw: &str) -> Option<String> {
     let room_id = normalize_room_id(raw);
     is_valid_room_id(&room_id).then_some(room_id)
+}
+
+fn display_room_code(room_id: &str) -> String {
+    match format_room_code(room_id) {
+        Some(display_code) => display_code,
+        None => room_id.to_owned(),
+    }
 }
 
 fn origin_allowed(state: &AppState, headers: &HeaderMap) -> bool {

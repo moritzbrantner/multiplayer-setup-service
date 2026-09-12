@@ -429,12 +429,12 @@ async fn relay_lobby_signal(
 }
 
 async fn send_server(socket: &mut WebSocket, message: &ServerMessage) -> Result<(), ()> {
-    let text = serde_json::to_string(message).expect("server message should serialize");
+    let text = serde_json::to_string(message).map_err(|_| ())?;
     send_direct(socket, text).await
 }
 
 async fn send_lobby_server(socket: &mut WebSocket, message: &LobbyServerMessage) -> Result<(), ()> {
-    let text = serde_json::to_string(message).expect("lobby server message should serialize");
+    let text = serde_json::to_string(message).map_err(|_| ())?;
     send_direct(socket, text).await
 }
 

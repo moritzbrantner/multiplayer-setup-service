@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "profile": "repository-foundation-v1",
+  "tiers": {
+    "fast": ["format:check", "lint", "test", "build"],
+    "integration": ["test:integration"],
+    "e2e": ["test:e2e"],
+    "performance": ["benchmark:smoke", "benchmark", "profile:runtime"]
+  },
+  "requiredCapabilities": [
+    "format:check",
+    "lint",
+    "test",
+    "build",
+    "test:integration",
+    "test:e2e"
+  ],
+  "optionalCapabilities": ["benchmark:smoke", "benchmark", "profile:runtime"],
+  "capabilityCommands": {
+    ".": {
+      "format:check": ["cargo", "fmt", "--all", "--", "--check"],
+      "lint": [
+        "cargo",
+        "clippy",
+        "--all-targets",
+        "--all-features",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "test": ["cargo", "test", "--all-targets", "--all-features", "--locked"],
+      "build": ["cargo", "build", "--locked"],
+      "benchmark:smoke": [
+        "cargo",
+        "test",
+        "--release",
+        "--test",
+        "performance_guardrails",
+        "--locked",
+        "--",
+        "--nocapture"
+      ],
+      "benchmark": [
+        "cargo",
+        "test",
+        "--release",
+        "--test",
+        "performance_guardrails",
+        "--locked",
+        "--",
+        "--nocapture"
+      ],
+      "profile:runtime": [
+        "cargo",
+        "run",
+        "--release",
+        "--locked",
+        "--bin",
+        "profile-stores"
+      ]
+    },
+    "web": {
+      "test:integration": ["bun", "run", "test"],
+      "benchmark:smoke": ["bun", "run", "test:perf"]
+    },
+    "e2e": {
+      "test:e2e": ["bun", "run", "test"]
+    }
+  }
+}

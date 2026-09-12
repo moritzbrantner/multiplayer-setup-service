@@ -40,17 +40,25 @@ jobs:
           rm -rf .runtime-profiler-tool
           test -z "$(git status --porcelain --untracked-files=all)"
 
-      - name: Prepare exact base worktree
+      - name: Prepare exact base with identical candidate workload
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- src/bin/profile-stores.rs || {
-            echo "The profile workload changed in this PR; refusing a non-identical base/candidate comparison."
-            exit 1
-          }
+          mkdir -p "$RUNNER_TEMP/runtime-profile"
           git worktree add "$RUNNER_TEMP/multiplayer-base" "$BASE_SHA"
           test -z "$(git -C "$RUNNER_TEMP/multiplayer-base" status --porcelain --untracked-files=all)"
+
+          # The code under measurement remains exact base vs exact candidate. The committed
+          # candidate harness and scenario are copied into the base worktree so both sides
+          # execute byte-identical workload definitions even when the harness itself is hardened.
+          git show "$HEAD_SHA:src/bin/profile-stores.rs" > "$RUNNER_TEMP/multiplayer-base/src/bin/profile-stores.rs"
+          git show "$HEAD_SHA:profiles/runtime-profiler/store-scale.yaml" > "$RUNNER_TEMP/multiplayer-base/profiles/runtime-profiler/store-scale.yaml"
+
+          cmp src/bin/profile-stores.rs "$RUNNER_TEMP/multiplayer-base/src/bin/profile-stores.rs"
+          cmp profiles/runtime-profiler/store-scale.yaml "$RUNNER_TEMP/multiplayer-base/profiles/runtime-profiler/store-scale.yaml"
+          sha256sum src/bin/profile-stores.rs profiles/runtime-profiler/store-scale.yaml \
+            | tee "$RUNNER_TEMP/runtime-profile/workload-sha256.txt"
 
       - name: Build identical committed profile workloads
         run: |
@@ -66,7 +74,6 @@ jobs:
           REFERENCE_SCENARIO: ${{ runner.temp }}/multiplayer-base/profiles/runtime-profiler/store-scale.yaml
           CANDIDATE_SCENARIO: ${{ github.workspace }}/profiles/runtime-profiler/store-scale.yaml
         run: |
-          mkdir -p "$RUNNER_TEMP/runtime-profile"
           (
             cd "$RUNNER_TEMP/multiplayer-base"
             "$PROFILER" capture \
@@ -90,6 +97,11 @@ jobs:
             > "$RUNNER_TEMP/runtime-profile/candidate-summary.txt"
           {
             echo '## runtime-profiler store-scale comparison'
+            echo
+            echo 'Candidate-committed workload hashes used for both base and candidate:'
+            echo '```text'
+            cat "$RUNNER_TEMP/runtime-profile/workload-sha256.txt"
+            echo '```'
             echo
             echo '```json'
             cat "$RUNNER_TEMP/runtime-profile/score.json"

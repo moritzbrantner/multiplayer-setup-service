@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "ruleId": "RUST-005",
+  "enforcement": {
+    "kind": "capability",
+    "capability": "benchmark:smoke",
+    "tiers": ["full"]
+  }
+}

@@ -1,1 +1,10 @@
-{"type":"module"}
+{
+  "name": "multiplayer-setup-browser",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test ../web-tests/*.test.mjs",
+    "test:perf": "node --test ../web-tests/*.perf.mjs",
+    "check": "bun run test && bun run test:perf"
+  }
+}
