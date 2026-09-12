@@ -71,12 +71,17 @@ fn pages_explainer_documents_the_actual_multiplayer_boundary() {
     let index = web_file("index.html");
     let explainer = web_file("explainer.js");
 
-    assert!(index.contains("Connect briefly. Play directly."));
-    assert!(index.contains("The server gets peers connected. It does not run the game."));
+    assert!(index.contains("id=\"mechanism\""));
+    assert!(index.contains("id=\"ownership\""));
+    assert!(index.contains("Thin control plane"));
+    assert!(index.contains("Direct data plane"));
+    assert!(index.contains("Optional content plane"));
+    assert!(index.contains("Infrastructure, not game authority."));
+    assert!(index.contains("WebRTC DataChannel after setup"));
     assert!(index.contains("data-topology=\"mesh\""));
     assert!(index.contains("data-topology=\"host\""));
     assert!(index.contains("max=\"16\""));
-    assert!(index.contains("Input-only synchronization"));
+    assert!(index.contains("id=\"messages\""));
     assert!(index.contains("./explainer.css"));
     assert!(index.contains("./explainer.js"));
 
@@ -95,9 +100,9 @@ fn pages_client_code_components_show_supported_browser_apis() {
 
     assert!(index.contains("id=\"client-code\""));
     assert!(index.contains("<client-code-gallery>"));
+    assert!(index.contains("Static client modules"));
     assert!(index.contains("./client-code-components.css"));
     assert!(index.contains("./client-code-components.js"));
-    assert!(index.contains("Copy the browser primitives into a real game."));
 
     assert!(components.contains("import { PeerSession } from \"./session.js\""));
     assert!(components.contains("import { LobbySession } from \"./lobby-session.js\""));
