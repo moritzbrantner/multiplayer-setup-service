@@ -28,7 +28,7 @@ struct TurnCredentialIssuer {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TurnCredentialRequest {
+pub(super) struct TurnCredentialRequest {
     participant_id: String,
 }
 
@@ -107,7 +107,7 @@ impl TurnCredentialIssuer {
     }
 }
 
-pub async fn issue_turn_credentials(
+pub(super) async fn issue_turn_credentials(
     State(state): State<AppState>,
     Path(raw_lobby_id): Path<String>,
     headers: HeaderMap,
