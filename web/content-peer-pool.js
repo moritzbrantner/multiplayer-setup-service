@@ -146,6 +146,8 @@ export class ContentPeerPool extends EventTarget {
     if (typeof this.uploadBudget.consume !== "function") {
       throw new Error("uploadBudget must provide consume()");
     }
+    this.uploadAdmissionBudget =
+      typeof this.uploadBudget.reserve === "function" ? this.uploadBudget : sessionUploadBudget(session);
     this.sendAbort = new AbortController();
     this.contentSharing = true;
     this.maxPeers = maxPeers;
@@ -234,46 +236,68 @@ export class ContentPeerPool extends EventTarget {
       throw new Error(`Content peer ${peerId} is not ready`);
     }
 
-    const icePath = await selectedIcePath(link.peer);
-    if (icePath === "relay") {
-      if (this.relayPolicy === "deny") {
+    const size = contentByteLength(data);
+    const admissionBudget = this.uploadAdmissionBudget;
+    const reservation = admissionBudget.reserve(size, { signal: this.sendAbort.signal });
+    if (!reservation || typeof reservation.release !== "function") {
+      throw new Error("uploadBudget reserve() must return a releasable reservation");
+    }
+    const waitSignals = [
+      ...(Array.isArray(reservation.signals) ? reservation.signals : []),
+      this.sendAbort.signal,
+      this.uploadBudget.pauseController?.signal,
+    ];
+
+    try {
+      const icePath = await selectedIcePath(link.peer);
+      if (icePath === "relay") {
+        if (this.relayPolicy === "deny") {
+          this.#emitRelayPolicy(peerId, "denied", 0);
+          throw new Error(`Bulk content over TURN relay is disabled for peer ${peerId}`);
+        }
+        if (this.relayPolicy === "limit") {
+          const now = Number(this.now());
+          if (!Number.isFinite(now)) throw new Error("now() must return a finite number");
+          const sendAt = Math.max(now, link.nextRelaySendAt);
+          const delayMs = Math.max(0, sendAt - now);
+          const reservationMs = Math.ceil((size * 1000) / this.relayMaxBytesPerSecond);
+          link.nextRelaySendAt = sendAt + reservationMs;
+          this.#emitRelayPolicy(peerId, "limited", delayMs, size);
+          if (delayMs > 0) await this.sleep(delayMs);
+        } else {
+          this.#emitRelayPolicy(peerId, "allowed", 0);
+        }
+      }
+
+      await this.#waitForCapacity(link.channel, highWaterMark, lowWaterMark, waitSignals);
+      // Pacing is shared by every content pool in this session, including direct peers.
+      if (admissionBudget === this.uploadBudget) {
+        if (typeof reservation.consume !== "function") {
+          throw new Error("uploadBudget reserve() must return a consumable reservation");
+        }
+        await reservation.consume();
+      } else {
+        await this.uploadBudget.consume(size, { signal: this.sendAbort.signal });
+      }
+      if (this.closed || this.peers.get(peerId) !== link || !this.#linkReady(link)) {
+        throw new Error(`Content peer ${peerId} is not ready`);
+      }
+      // A route can change while backpressure or an upload budget delays a send.
+      const finalPath = await selectedIcePath(link.peer);
+      if (finalPath === "relay" && this.relayPolicy === "deny") {
         this.#emitRelayPolicy(peerId, "denied", 0);
         throw new Error(`Bulk content over TURN relay is disabled for peer ${peerId}`);
       }
-      if (this.relayPolicy === "limit") {
-        const size = contentByteLength(data);
-        const now = Number(this.now());
-        if (!Number.isFinite(now)) throw new Error("now() must return a finite number");
-        const sendAt = Math.max(now, link.nextRelaySendAt);
-        const delayMs = Math.max(0, sendAt - now);
-        const reservationMs = Math.ceil((size * 1000) / this.relayMaxBytesPerSecond);
-        link.nextRelaySendAt = sendAt + reservationMs;
-        this.#emitRelayPolicy(peerId, "limited", delayMs, size);
-        if (delayMs > 0) await this.sleep(delayMs);
-      } else {
-        this.#emitRelayPolicy(peerId, "allowed", 0);
+      if (finalPath === "relay" && icePath !== "relay" && this.relayPolicy === "limit") {
+        throw new Error("Content route changed to TURN; retry under the relay rate policy");
       }
+      if (this.closed || this.uploadBudget.paused || this.peers.get(peerId) !== link || !this.#linkReady(link)) {
+        throw new Error(`Content peer ${peerId} is not ready for upload`);
+      }
+      link.channel.send(data);
+    } finally {
+      reservation.release();
     }
-
-    await this.#waitForCapacity(link.channel, highWaterMark, lowWaterMark);
-    // Pacing is shared by every content pool in this session, including direct peers.
-    await this.uploadBudget.consume(contentByteLength(data), { signal: this.sendAbort.signal });
-    if (this.closed || this.peers.get(peerId) !== link || !this.#linkReady(link)) {
-      throw new Error(`Content peer ${peerId} is not ready`);
-    }
-    // A route can change while backpressure or an upload budget delays a send.
-    const finalPath = await selectedIcePath(link.peer);
-    if (finalPath === "relay" && this.relayPolicy === "deny") {
-      this.#emitRelayPolicy(peerId, "denied", 0);
-      throw new Error(`Bulk content over TURN relay is disabled for peer ${peerId}`);
-    }
-    if (finalPath === "relay" && icePath !== "relay" && this.relayPolicy === "limit") {
-      throw new Error("Content route changed to TURN; retry under the relay rate policy");
-    }
-    if (this.closed || this.uploadBudget.paused || this.peers.get(peerId) !== link || !this.#linkReady(link)) {
-      throw new Error(`Content peer ${peerId} is not ready for upload`);
-    }
-    link.channel.send(data);
   }
 
   disconnect(peerId) {
@@ -532,14 +556,17 @@ export class ContentPeerPool extends EventTarget {
     );
   }
 
-  async #waitForCapacity(channel, highWaterMark, lowWaterMark) {
+  async #waitForCapacity(channel, highWaterMark, lowWaterMark, signals = [this.sendAbort.signal]) {
+    const abortSignals = [...new Set(signals.filter(Boolean))];
+    const aborted = () => abortSignals.some((signal) => signal.aborted);
+    if (aborted()) throw new Error("Content upload was cancelled or paused for gameplay");
     if (channel.bufferedAmount < highWaterMark) return;
     channel.bufferedAmountLowThreshold = lowWaterMark;
     await new Promise((resolve, reject) => {
       const cleanup = () => {
         channel.removeEventListener("bufferedamountlow", onLow);
         channel.removeEventListener("close", onClose);
-        this.sendAbort.signal.removeEventListener("abort", onClose);
+        for (const signal of abortSignals) signal.removeEventListener("abort", onAbort);
       };
       const onLow = () => {
         cleanup();
@@ -549,10 +576,18 @@ export class ContentPeerPool extends EventTarget {
         cleanup();
         reject(new Error("Content channel closed while waiting for send capacity"));
       };
+      const onAbort = () => {
+        cleanup();
+        reject(new Error("Content upload was cancelled or paused for gameplay"));
+      };
       channel.addEventListener("bufferedamountlow", onLow);
       channel.addEventListener("close", onClose, { once: true });
-      this.sendAbort.signal.addEventListener("abort", onClose, { once: true });
-      if (this.sendAbort.signal.aborted || channel.readyState !== "open") {
+      for (const signal of abortSignals) signal.addEventListener("abort", onAbort, { once: true });
+      if (aborted()) {
+        onAbort();
+        return;
+      }
+      if (channel.readyState !== "open") {
         onClose();
         return;
       }
