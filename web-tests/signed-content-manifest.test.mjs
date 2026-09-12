@@ -66,6 +66,37 @@ test("unknown signing keys are rejected before content can become trusted", asyn
   );
 });
 
+test("revoked signing keys are rejected even while their public key remains pinned", async () => {
+  const { envelope, trustedKeys } = await signedEnvelope(manifest(), "release-compromised");
+  await assert.rejects(
+    () => verifySignedManifest(envelope, { trustedKeys, revokedKeyIds: ["release-compromised"] }),
+    /signing key is revoked/,
+  );
+  await assert.rejects(
+    () => resolveTrustedManifest(envelope, { trustedKeys, revokedKeyIds: new Set(["release-compromised"]) }),
+    /signing key is revoked/,
+  );
+});
+
+test("key rotation can overlap trusted keys while revocation removes only the retired key", async () => {
+  const oldRelease = await signedEnvelope(manifest({ version: "1.0.0" }), "release-old");
+  const newRelease = await signedEnvelope(manifest({ version: "2.0.0" }), "release-new");
+  const trustedKeys = new Map([...oldRelease.trustedKeys, ...newRelease.trustedKeys]);
+
+  assert.equal((await verifySignedManifest(oldRelease.envelope, { trustedKeys })).keyId, "release-old");
+  assert.equal((await verifySignedManifest(newRelease.envelope, { trustedKeys })).keyId, "release-new");
+
+  const revokedKeyIds = ["release-old"];
+  await assert.rejects(
+    () => verifySignedManifest(oldRelease.envelope, { trustedKeys, revokedKeyIds }),
+    /signing key is revoked/,
+  );
+  assert.equal(
+    (await verifySignedManifest(newRelease.envelope, { trustedKeys, revokedKeyIds })).keyId,
+    "release-new",
+  );
+});
+
 test("unsigned execution-critical logic is rejected", async () => {
   await assert.rejects(() => resolveTrustedManifest(manifest()), /logic requires a signed/);
 });
