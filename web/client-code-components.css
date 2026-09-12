@@ -1,3 +1,7 @@
+body.explainer-page main {
+  margin: 0 auto;
+}
+
 client-code-gallery,
 client-code-example {
   display: block;
