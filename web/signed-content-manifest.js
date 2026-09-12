@@ -31,6 +31,20 @@ function base64UrlBytes(value, field) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
+function normalizeKeyIdSet(value, field) {
+  if (value == null) return new Set();
+  const values = value instanceof Set ? [...value] : Array.isArray(value) ? value : null;
+  if (!values) throw new Error(`${field} must be an array or Set of key IDs`);
+  const result = new Set();
+  for (const keyId of values) {
+    if (typeof keyId !== "string" || !KEY_ID_PATTERN.test(keyId)) {
+      throw new Error(`${field} contains an invalid key ID`);
+    }
+    result.add(keyId);
+  }
+  return result;
+}
+
 function trustedKeyBytes(trustedKeys, keyId) {
   const value = trustedKeys instanceof Map ? trustedKeys.get(keyId) : trustedKeys?.[keyId];
   if (value == null) throw new Error(`Unknown trusted manifest signing key: ${keyId}`);
@@ -61,11 +75,20 @@ export function canonicalManifestBytes(manifest) {
   return new TextEncoder().encode(canonicalize(manifest));
 }
 
-export async function verifySignedManifest(envelope, { trustedKeys } = {}) {
+export async function verifySignedManifest(
+  envelope,
+  { trustedKeys, revokedKeyIds = null } = {},
+) {
   validateEnvelope(envelope);
   if (!trustedKeys) throw new Error("trustedKeys is required for signed manifest verification");
 
-  const publicKeyBytes = trustedKeyBytes(trustedKeys, envelope.signature.keyId);
+  const revoked = normalizeKeyIdSet(revokedKeyIds, "revokedKeyIds");
+  const keyId = envelope.signature.keyId;
+  if (revoked.has(keyId)) {
+    throw new Error(`Trusted manifest signing key is revoked: ${keyId}`);
+  }
+
+  const publicKeyBytes = trustedKeyBytes(trustedKeys, keyId);
   if (publicKeyBytes.byteLength !== 32) throw new Error("Ed25519 public keys must be exactly 32 bytes");
   const signatureBytes = base64UrlBytes(envelope.signature.value, "manifest signature");
   if (signatureBytes.byteLength !== 64) throw new Error("Ed25519 signatures must be exactly 64 bytes");
@@ -87,17 +110,17 @@ export async function verifySignedManifest(envelope, { trustedKeys } = {}) {
 
   return {
     manifest: envelope.manifest,
-    keyId: envelope.signature.keyId,
+    keyId,
     algorithm: SIGNATURE_ALGORITHM,
   };
 }
 
 export async function resolveTrustedManifest(
   value,
-  { trustedKeys = null, allowUnsignedAssets = true } = {},
+  { trustedKeys = null, revokedKeyIds = null, allowUnsignedAssets = true } = {},
 ) {
   if (isObject(value) && value.protocol === SIGNED_MANIFEST_PROTOCOL) {
-    return (await verifySignedManifest(value, { trustedKeys })).manifest;
+    return (await verifySignedManifest(value, { trustedKeys, revokedKeyIds })).manifest;
   }
 
   const manifest = validateTrustedManifest(value);

@@ -3,6 +3,7 @@ import { VerifiedChunkStore } from "./verified-chunk-store.js";
 
 const DEFAULT_DATABASE = "multiplayer-verified-content-v1";
 const STORE_NAME = "chunks";
+export const DEFAULT_MAX_PERSISTED_CONTENT_BYTES = 256 * 1024 * 1024;
 
 function namespaceFor(manifest) {
   validateTrustedManifest(manifest);
@@ -16,6 +17,16 @@ function storageKey(namespace, path, index) {
 function toStoredBytes(value) {
   if (!(value instanceof Uint8Array)) throw new Error("Verified cache only stores Uint8Array chunks");
   return value.slice().buffer;
+}
+
+function validateMaxBytes(value) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error("maxBytes must be a non-negative safe integer");
+  }
+}
+
+function normalizedTouchedAt(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 function openDatabase(name) {
@@ -48,9 +59,18 @@ function transactionDone(transaction) {
   });
 }
 
+function requestResult(request, message) {
+  return new Promise((resolve, reject) => {
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener("error", () => reject(request.error ?? new Error(message)), { once: true });
+  });
+}
+
 export class MemoryChunkPersistence {
-  constructor() {
+  constructor({ now = () => Date.now() } = {}) {
+    if (typeof now !== "function") throw new Error("now must be a function");
     this.entries = new Map();
+    this.now = now;
   }
 
   async list(namespace) {
@@ -59,9 +79,21 @@ export class MemoryChunkPersistence {
       .map((entry) => ({ ...entry, bytes: entry.bytes.slice() }));
   }
 
-  async put(namespace, path, index, bytes) {
+  async put(namespace, path, index, bytes, touchedAt = this.now()) {
     const key = storageKey(namespace, path, index);
-    this.entries.set(key, { key, namespace, path, index, bytes: bytes.slice() });
+    this.entries.set(key, {
+      key,
+      namespace,
+      path,
+      index,
+      bytes: bytes.slice(),
+      touchedAt: normalizedTouchedAt(touchedAt),
+    });
+  }
+
+  async touch(namespace, path, index, touchedAt = this.now()) {
+    const entry = this.entries.get(storageKey(namespace, path, index));
+    if (entry) entry.touchedAt = normalizedTouchedAt(touchedAt);
   }
 
   async delete(namespace, path, index) {
@@ -96,23 +128,19 @@ export class IndexedDbChunkPersistence {
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readonly");
     const index = transaction.objectStore(STORE_NAME).index("namespace");
-    const request = index.getAll(namespace);
-    const result = await new Promise((resolve, reject) => {
-      request.addEventListener("success", () => resolve(request.result ?? []), { once: true });
-      request.addEventListener("error", () => reject(request.error ?? new Error("Could not read verified cache")), {
-        once: true,
-      });
-    });
+    const result = (await requestResult(index.getAll(namespace), "Could not read verified cache")) ?? [];
     await transactionDone(transaction);
     return result.map((entry) => ({
+      key: entry.key,
       namespace: entry.namespace,
       path: entry.path,
       index: entry.index,
       bytes: new Uint8Array(entry.bytes),
+      touchedAt: normalizedTouchedAt(entry.touchedAt),
     }));
   }
 
-  async put(namespace, path, index, bytes) {
+  async put(namespace, path, index, bytes, touchedAt = Date.now()) {
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readwrite");
     transaction.objectStore(STORE_NAME).put({
@@ -121,8 +149,21 @@ export class IndexedDbChunkPersistence {
       path,
       index,
       bytes: toStoredBytes(bytes),
-      touchedAt: Date.now(),
+      touchedAt: normalizedTouchedAt(touchedAt),
     });
+    await transactionDone(transaction);
+  }
+
+  async touch(namespace, path, index, touchedAt = Date.now()) {
+    const database = await this.#database();
+    const transaction = database.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    const key = storageKey(namespace, path, index);
+    const entry = await requestResult(store.get(key), "Could not touch verified cache entry");
+    if (entry) {
+      entry.touchedAt = normalizedTouchedAt(touchedAt);
+      store.put(entry);
+    }
     await transactionDone(transaction);
   }
 
@@ -155,11 +196,33 @@ export class IndexedDbChunkPersistence {
 }
 
 export class PersistentVerifiedChunkStore extends VerifiedChunkStore {
-  constructor({ manifest, persistence = new IndexedDbChunkPersistence() } = {}) {
+  constructor({
+    manifest,
+    persistence = new IndexedDbChunkPersistence(),
+    maxBytes = DEFAULT_MAX_PERSISTED_CONTENT_BYTES,
+    onStoragePressure = null,
+    now = () => Date.now(),
+  } = {}) {
     super({ manifest });
+    validateMaxBytes(maxBytes);
+    if (onStoragePressure !== null && typeof onStoragePressure !== "function") {
+      throw new Error("onStoragePressure must be a function when provided");
+    }
+    if (typeof now !== "function") throw new Error("now must be a function");
     this.persistence = persistence;
     this.namespace = namespaceFor(manifest);
+    this.maxBytes = maxBytes;
+    this.onStoragePressure = onStoragePressure;
+    this.now = now;
+    this.lastTouchedAt = 0;
     this.ready = this.#hydrate();
+  }
+
+  #stamp() {
+    const current = Number(this.now());
+    if (!Number.isSafeInteger(current) || current < 0) throw new Error("now() must return a non-negative safe integer");
+    this.lastTouchedAt = Math.max(current, this.lastTouchedAt + 1);
+    return this.lastTouchedAt;
   }
 
   async #hydrate() {
@@ -167,6 +230,7 @@ export class PersistentVerifiedChunkStore extends VerifiedChunkStore {
     let accepted = 0;
     let rejected = 0;
     for (const entry of entries) {
+      this.lastTouchedAt = Math.max(this.lastTouchedAt, normalizedTouchedAt(entry.touchedAt));
       try {
         await super.putChunk(entry.path, entry.index, entry.bytes);
         accepted += 1;
@@ -175,14 +239,77 @@ export class PersistentVerifiedChunkStore extends VerifiedChunkStore {
         await this.persistence.delete(this.namespace, entry.path, entry.index);
       }
     }
+    await this.#enforceBudget();
     return { accepted, rejected };
+  }
+
+  async #enforceBudget() {
+    const entries = await this.persistence.list(this.namespace);
+    let persistedBytes = entries.reduce((total, entry) => total + entry.bytes.byteLength, 0);
+    if (persistedBytes <= this.maxBytes) return null;
+
+    const originalBytes = persistedBytes;
+    const ordered = [...entries].sort((left, right) => {
+      const timeDifference = normalizedTouchedAt(left.touchedAt) - normalizedTouchedAt(right.touchedAt);
+      if (timeDifference !== 0) return timeDifference;
+      const pathDifference = left.path.localeCompare(right.path);
+      return pathDifference !== 0 ? pathDifference : left.index - right.index;
+    });
+
+    let evictedEntries = 0;
+    let evictedBytes = 0;
+    for (const entry of ordered) {
+      if (persistedBytes <= this.maxBytes) break;
+      await this.persistence.delete(this.namespace, entry.path, entry.index);
+      persistedBytes -= entry.bytes.byteLength;
+      evictedEntries += 1;
+      evictedBytes += entry.bytes.byteLength;
+    }
+
+    const detail = {
+      namespace: this.namespace,
+      maxBytes: this.maxBytes,
+      requestedBytes: originalBytes,
+      persistedBytes,
+      evictedEntries,
+      evictedBytes,
+    };
+    try {
+      this.onStoragePressure?.(detail);
+    } catch {
+      // Storage correctness must not depend on observer behavior.
+    }
+    return detail;
+  }
+
+  async storageUsage() {
+    await this.ready;
+    const entries = await this.persistence.list(this.namespace);
+    return {
+      namespace: this.namespace,
+      maxBytes: this.maxBytes,
+      entries: entries.length,
+      bytes: entries.reduce((total, entry) => total + entry.bytes.byteLength, 0),
+    };
+  }
+
+  getChunk(path, index) {
+    const chunk = super.getChunk(path, index);
+    if (chunk && typeof this.persistence.touch === "function") {
+      const touchedAt = this.#stamp();
+      Promise.resolve(this.persistence.touch(this.namespace, path, index, touchedAt)).catch(() => {
+        // A failed LRU touch must not invalidate already verified in-memory bytes.
+      });
+    }
+    return chunk;
   }
 
   async putChunk(path, index, value) {
     await this.ready;
     const verification = await super.putChunk(path, index, value);
     const verified = super.getChunk(path, index);
-    await this.persistence.put(this.namespace, path, index, verified);
+    await this.persistence.put(this.namespace, path, index, verified, this.#stamp());
+    await this.#enforceBudget();
     return verification;
   }
 
@@ -190,8 +317,9 @@ export class PersistentVerifiedChunkStore extends VerifiedChunkStore {
     await this.ready;
     const result = await super.putFile(path, value);
     for (const index of super.availableChunks(path)) {
-      await this.persistence.put(this.namespace, path, index, super.getChunk(path, index));
+      await this.persistence.put(this.namespace, path, index, super.getChunk(path, index), this.#stamp());
     }
+    await this.#enforceBudget();
     return result;
   }
 
