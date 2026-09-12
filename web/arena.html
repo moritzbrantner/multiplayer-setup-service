@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A 2–16 player input-only WebRTC arena built on multiplayer-setup-service lobbies.">
   <title>Input-only multiplayer arena</title>
   <link rel="stylesheet" href="./common.css">
   <style>
     .arena-config { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
-    select { font: inherit; min-height: 44px; border-radius: 8px; border: 1px solid color-mix(in srgb, CanvasText 24%, transparent); padding: 9px 12px; }
-    .arena-stage { position: relative; aspect-ratio: 16 / 10; width: 100%; overflow: hidden; border: 1px solid color-mix(in srgb, CanvasText 24%, transparent); border-radius: 12px; background: color-mix(in srgb, CanvasText 5%, Canvas); }
-    .arena-player { position: absolute; width: 22px; height: 22px; border-radius: 50%; transform: translate(-50%, -50%); border: 2px solid Canvas; box-shadow: 0 0 0 1px color-mix(in srgb, CanvasText 35%, transparent); }
+    .arena-stage { position: relative; aspect-ratio: 16 / 10; width: 100%; overflow: hidden; border: 1px solid var(--ui-line-strong); border-radius: 14px; background: var(--ui-surface-soft); }
+    .arena-player { position: absolute; width: 22px; height: 22px; border-radius: 50%; transform: translate(-50%, -50%); border: 2px solid var(--ui-surface-solid); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ui-ink) 35%, transparent); }
     .arena-player[data-self="true"] { width: 28px; height: 28px; }
-    .arena-player span { position: absolute; left: 50%; top: 25px; transform: translateX(-50%); white-space: nowrap; font: 11px ui-monospace, monospace; color: CanvasText; background: Canvas; padding: 1px 3px; border-radius: 3px; }
-    .arena-meta { display: flex; flex-wrap: wrap; gap: 12px 20px; margin: 12px 0; }
+    .arena-player span { position: absolute; left: 50%; top: 25px; transform: translateX(-50%); white-space: nowrap; font: 11px ui-monospace, monospace; color: var(--ui-ink); background: var(--ui-surface-solid); padding: 1px 3px; border-radius: 3px; }
+    .arena-meta { display: flex; flex-wrap: wrap; gap: 12px 20px; margin: 12px 0; color: var(--ui-muted); }
     .controls { display: grid; grid-template-columns: repeat(3, 48px); grid-template-rows: repeat(2, 48px); gap: 6px; width: max-content; margin-top: 12px; }
     .controls button { min-height: 48px; padding: 0; }
     #up { grid-column: 2; }
@@ -24,11 +24,19 @@
 </head>
 <body>
   <main>
-    <nav><a href="./">Demos</a></nav>
+    <nav><a href="./index.html">Demos</a><a href="./pong.html">Pong</a><a href="./tic-tac-toe.html">Tic-Tac-Toe</a><a href="./card-game.html">Card game</a></nav>
+    <p class="eyebrow">2–16 player topology demo</p>
     <h1>16-player input arena</h1>
-    <p>Each browser computes the same state locally. The network carries only small movement commands and WebRTC setup traffic.</p>
+    <p class="lead">Each browser computes the same state locally. The network carries only small movement commands and WebRTC setup traffic.</p>
 
-    <section class="panel">
+    <section class="panel lobby-panel">
+      <div class="lobby-panel-heading">
+        <div>
+          <h2>Create or join a lobby</h2>
+          <p class="muted">Pick a topology before connecting; the invite preserves that choice.</p>
+        </div>
+        <span class="latency-chip" data-lobby-latency data-quality="unknown">Ping —</span>
+      </div>
       <div class="arena-config">
         <label>
           Topology
@@ -48,16 +56,25 @@
         </label>
       </div>
       <div class="lobby">
-        <button id="host" type="button">Host lobby</button>
+        <button id="host" class="primary" type="button">Host lobby</button>
         <span>or</span>
-        <label>
-          Lobby code
-          <input id="code" autocomplete="off" placeholder="ABCD-EFGH-JKMN">
-        </label>
+        <label>Lobby code <input id="code" autocomplete="off" placeholder="ABCD-EFGH-JKMN"></label>
         <button id="join" type="button">Join lobby</button>
       </div>
       <p id="status" class="status" aria-live="polite">Not connected.</p>
-      <p id="invite" class="muted"></p>
+      <div class="invite-row hidden" data-lobby-invite-row>
+        <div class="invite-code"><span class="muted">Lobby</span><span class="room-code">Join link</span></div>
+        <a id="invite" class="invite-link" data-lobby-invite href="#" rel="nofollow"></a>
+        <button type="button" data-lobby-share disabled>Share invite</button>
+      </div>
+      <section class="lobby-chat" aria-label="Lobby chat">
+        <div class="lobby-chat-head"><strong>Lobby chat</strong><span class="muted">Peer to peer</span></div>
+        <ol class="chat-log" data-lobby-chat-log aria-live="polite"></ol>
+        <form class="chat-form" data-lobby-chat-form>
+          <input data-lobby-chat-input maxlength="500" disabled autocomplete="off" aria-label="Lobby chat message" placeholder="Chat becomes available when a peer connects">
+          <button type="submit" data-lobby-chat-send disabled>Send</button>
+        </form>
+      </section>
     </section>
 
     <section id="game" class="game-shell hidden">

@@ -1,3 +1,4 @@
+import { LobbyExperience, readInviteJoin } from "./lobby-experience.js";
 import { movePaddleToward, mayAcceptPongScore } from "./pong-model.mjs";
 import { PeerSession } from "./session.js";
 
@@ -9,6 +10,9 @@ const BALL_R = 9;
 const PADDLE_SPEED = 330;
 const SNAPSHOT_INTERVAL = 1 / 30;
 
+const params = new URLSearchParams(location.search);
+const apiBase = params.get("api") ?? "http://127.0.0.1:8787";
+const inviteJoin = readInviteJoin({ search: location.search, codeParam: "room" });
 const hostButton = document.querySelector("#host");
 const joinButton = document.querySelector("#join");
 const roomInput = document.querySelector("#room");
@@ -24,7 +28,10 @@ const securityStatus = document.querySelector("#securityStatus");
 const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d");
 
+if (inviteJoin.code) roomInput.value = inviteJoin.code;
+
 let session = null;
+let lobbyExperience = null;
 let ready = false;
 let previousTime = performance.now();
 let snapshotBudget = 0;
@@ -197,6 +204,13 @@ function setLocalPaddleFromPointer(event) {
 
 function attachSession(next) {
   session = next;
+  lobbyExperience?.close();
+  lobbyExperience = new LobbyExperience({
+    session: next,
+    root: document,
+    codeParam: "room",
+    inviteTitle: "Join my Pong game",
+  });
   session.addEventListener("room", (event) => {
     code.textContent = event.detail.displayCode;
     codeRow.classList.remove("hidden");
@@ -254,7 +268,8 @@ async function connect(mode) {
   hostButton.disabled = true;
   joinButton.disabled = true;
   roomInput.disabled = true;
-  const next = new PeerSession({ apiBase: new URLSearchParams(location.search).get("api") ?? "http://127.0.0.1:8787" });
+  ready = false;
+  const next = new PeerSession({ apiBase });
   attachSession(next);
   try {
     if (mode === "host") await next.host();
@@ -262,6 +277,8 @@ async function connect(mode) {
     status.textContent = "Waiting for peer-to-peer connection…";
   } catch (error) {
     status.textContent = error.message;
+    lobbyExperience?.close();
+    lobbyExperience = null;
     next.close();
     session = null;
     hostButton.disabled = false;
@@ -303,4 +320,9 @@ hostButton.addEventListener("click", () => connect("host"));
 joinButton.addEventListener("click", () => connect("join"));
 resetButton.addEventListener("click", resetScores);
 forgeScoreButton.addEventListener("click", attemptForgedScore);
+window.addEventListener("beforeunload", () => {
+  lobbyExperience?.close();
+  session?.close();
+});
 requestAnimationFrame(frame);
+if (inviteJoin.autoJoin) queueMicrotask(() => connect("join"));

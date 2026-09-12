@@ -3,29 +3,55 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A low-latency peer-to-peer Pong demo using multiplayer-setup-service for WebRTC rendezvous.">
   <title>Peer-to-peer Pong</title>
   <link rel="stylesheet" href="./common.css">
   <style>
     .score { display: flex; justify-content: center; gap: 36px; font-size: 1.4rem; font-weight: 700; margin: 8px 0 14px; }
-    canvas { width: 100%; aspect-ratio: 16 / 9; display: block; background: #111; border-radius: 10px; touch-action: none; }
+    canvas { width: 100%; aspect-ratio: 16 / 9; display: block; background: #111; border-radius: 12px; touch-action: none; }
     .controls { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
     .security-probe { display: grid; gap: 8px; }
   </style>
 </head>
 <body>
   <main>
-    <nav><a href="./index.html">Demos</a><a href="./tic-tac-toe.html">Tic-Tac-Toe</a><a href="./card-game.html">Card game</a></nav>
+    <nav><a href="./index.html">Demos</a><a href="./tic-tac-toe.html">Tic-Tac-Toe</a><a href="./card-game.html">Card game</a><a href="./arena.html">16-player arena</a></nav>
+    <p class="eyebrow">Low-latency two-player demo</p>
     <h1>Peer-to-peer Pong</h1>
-    <section class="panel lobby" aria-label="Lobby controls">
-      <button id="host" type="button">Host game</button>
-      <span>or</span>
-      <label>Room code <input id="room" autocomplete="off" placeholder="ABCD-EFGH-JKMN"></label>
-      <button id="join" type="button">Join game</button>
-    </section>
-    <p id="status" class="status" aria-live="polite">Not connected.</p>
-    <p id="codeRow" class="hidden">Room: <span id="code" class="room-code"></span></p>
+    <p class="lead">The host owns ball physics and scoring while realtime paddle input travels over a freshness-first WebRTC DataChannel. The setup service only gets the two browsers connected.</p>
 
-    <section class="panel game-shell">
+    <section class="panel lobby-panel" aria-label="Lobby controls">
+      <div class="lobby-panel-heading">
+        <div>
+          <h2>Connect a peer</h2>
+          <p class="muted">Host a room, enter a code, or send someone the join link.</p>
+        </div>
+        <span class="latency-chip" data-lobby-latency data-quality="unknown">Ping —</span>
+      </div>
+      <div class="lobby">
+        <button id="host" class="primary" type="button">Host game</button>
+        <span>or</span>
+        <label>Room code <input id="room" autocomplete="off" placeholder="ABCD-EFGH-JKMN"></label>
+        <button id="join" type="button">Join game</button>
+      </div>
+      <p id="status" class="status" aria-live="polite">Not connected.</p>
+      <div id="codeRow" class="invite-row hidden" data-lobby-invite-row>
+        <div class="invite-code"><span class="muted">Room</span><span id="code" class="room-code"></span></div>
+        <a class="invite-link" data-lobby-invite href="#" rel="nofollow"></a>
+        <button type="button" data-lobby-share disabled>Share invite</button>
+      </div>
+      <section class="lobby-chat" aria-label="Lobby chat">
+        <div class="lobby-chat-head"><strong>Lobby chat</strong><span class="muted">Peer to peer</span></div>
+        <ol class="chat-log" data-lobby-chat-log aria-live="polite"></ol>
+        <form class="chat-form" data-lobby-chat-form>
+          <input data-lobby-chat-input maxlength="500" disabled autocomplete="off" aria-label="Lobby chat message" placeholder="Chat becomes available when a peer connects">
+          <button type="submit" data-lobby-chat-send disabled>Send</button>
+        </form>
+      </section>
+    </section>
+
+    <section class="game-shell">
+      <div class="game-telemetry"><span class="latency-chip" data-lobby-latency data-quality="unknown">Ping —</span></div>
       <div class="score"><span>Host <b id="hostScore">0</b></span><span>Guest <b id="guestScore">0</b></span></div>
       <canvas id="game" width="800" height="450" aria-label="Pong game field"></canvas>
       <div class="controls">

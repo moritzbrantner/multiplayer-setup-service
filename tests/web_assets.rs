@@ -49,6 +49,31 @@ fn games_share_the_peer_session_transport() {
 }
 
 #[test]
+fn demo_lobbies_share_invites_chat_and_latency_telemetry() {
+    let experience = web_file("lobby-experience.js");
+    assert!(experience.contains("multiplayer-lobby-chat-v1"));
+    assert!(experience.contains("multiplayer-lobby-ping-v1"));
+    assert!(experience.contains("navigator.share"));
+    assert!(experience.contains("searchParams.set(\"join\", \"1\")"));
+
+    for script in ["pong.js", "tic-tac-toe.js", "card-game.js", "arena.js"] {
+        assert!(web_file(script).contains("./lobby-experience.js"));
+    }
+    for page in [
+        "pong.html",
+        "tic-tac-toe.html",
+        "card-game.html",
+        "arena.html",
+    ] {
+        let source = web_file(page);
+        assert!(source.contains("data-lobby-chat-form"));
+        assert!(source.contains("data-lobby-share"));
+        assert!(source.contains("data-lobby-latency"));
+    }
+    assert!(web_file("pong.html").matches("data-lobby-latency").count() >= 2);
+}
+
+#[test]
 fn input_arena_transmits_commands_and_delegates_deterministic_calculation() {
     let arena = web_file("arena.js");
     let model = web_file("arena-model.mjs");
