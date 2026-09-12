@@ -1,30 +1,29 @@
+mod admission;
 mod lobby;
 mod protocol;
+mod sockets;
 mod state;
 mod turn;
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Query, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ORIGIN, SEC_WEBSOCKET_PROTOCOL};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use lobby::{LobbyConnectionCommand, LobbyStore, LobbyStoreError};
+use lobby::{LobbyStore, LobbyStoreError};
 use protocol::{
-    CAPABILITY_PROTOCOL_PREFIX, ClientMessage, ClientMessageError, LobbyClientMessage,
-    LobbyServerMessage, MAX_SIGNAL_BYTES, PeerRole, ServerMessage, WEBSOCKET_PROTOCOL,
-    format_room_code, is_valid_participant_id, is_valid_room_id, normalize_room_id,
-    parse_client_message, parse_lobby_client_message,
+    CAPABILITY_PROTOCOL_PREFIX, MAX_SIGNAL_BYTES, PeerRole, WEBSOCKET_PROTOCOL, format_room_code,
+    is_valid_participant_id, is_valid_room_id, normalize_room_id,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use state::{ConnectionCommand, RoomStore, StoreError};
+use sockets::{handle_lobby_socket, handle_socket};
+use state::{RoomStore, StoreError};
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -261,15 +260,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             post(turn::issue_turn_credentials),
         )
         .route("/lobbies/{lobby_id}/connect", get(connect_lobby))
+        .layer(axum::middleware::from_fn_with_state(
+            admission::Admission::default(),
+            admission::limit_http,
+        ))
         .layer(cors)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     info!(%bind_addr, "multiplayer setup service listening");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     Ok(())
 }
@@ -376,6 +382,7 @@ async fn connect_room(
     }
 
     ws.max_message_size(MAX_SIGNAL_BYTES)
+        .max_frame_size(MAX_SIGNAL_BYTES)
         .protocols([WEBSOCKET_PROTOCOL])
         .on_upgrade(move |socket| handle_socket(socket, state, room_id, query.role, token))
 }
@@ -409,6 +416,7 @@ async fn create_lobby(
                 expires_at: created.expires_at,
                 max_expires_at: created.max_expires_at,
                 max_participants: created.max_participants,
+                websocket_path: format!("/lobbies/{}/connect", created.lobby_id),
             }),
         )
             .into_response(),
@@ -552,378 +560,11 @@ async fn connect_lobby(
     }
 
     ws.max_message_size(MAX_SIGNAL_BYTES)
+        .max_frame_size(MAX_SIGNAL_BYTES)
         .protocols([WEBSOCKET_PROTOCOL])
         .on_upgrade(move |socket| {
             handle_lobby_socket(socket, state, lobby_id, query.participant_id, token)
         })
-}
-
-async fn handle_socket(
-    mut socket: WebSocket,
-    state: AppState,
-    room_id: String,
-    role: PeerRole,
-    token: String,
-) {
-    let (sender, mut commands) = mpsc::unbounded_channel();
-    let registration = match state
-        .rooms
-        .register_connection(&room_id, role, &token, sender)
-        .await
-    {
-        Ok(registration) => registration,
-        Err(_) => {
-            let _ = socket.send(Message::Close(None)).await;
-            return;
-        }
-    };
-
-    if let Some(replaced) = registration.replaced {
-        let _ = replaced.send(ConnectionCommand::Close);
-    }
-
-    if send_server(&mut socket, &ServerMessage::Connected { role })
-        .await
-        .is_err()
-    {
-        let _ = state
-            .rooms
-            .unregister_connection(&room_id, role, registration.connection_id)
-            .await;
-        return;
-    }
-
-    if let Some(peer) = registration.peer {
-        let _ = send_server(
-            &mut socket,
-            &ServerMessage::PeerConnected {
-                peer_role: role.other(),
-            },
-        )
-        .await;
-        let _ = peer.send(ConnectionCommand::Send(ServerMessage::PeerConnected {
-            peer_role: role,
-        }));
-    }
-
-    loop {
-        tokio::select! {
-            command = commands.recv() => {
-                match command {
-                    Some(ConnectionCommand::Send(message)) => {
-                        if send_server(&mut socket, &message).await.is_err() {
-                            break;
-                        }
-                    }
-                    Some(ConnectionCommand::Close) | None => {
-                        let _ = socket.send(Message::Close(None)).await;
-                        break;
-                    }
-                }
-            }
-            incoming = socket.recv() => {
-                match incoming {
-                    Some(Ok(Message::Text(text))) => {
-                        if !handle_client_text(&mut socket, &state, &room_id, role, &text).await {
-                            break;
-                        }
-                    }
-                    Some(Ok(Message::Binary(_))) => {
-                        let _ = socket.send(Message::Close(None)).await;
-                        break;
-                    }
-                    Some(Ok(Message::Ping(_))) => {}
-                    Some(Ok(Message::Pong(_))) => {}
-                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                }
-            }
-        }
-    }
-
-    if let Some(peer) = state
-        .rooms
-        .unregister_connection(&room_id, role, registration.connection_id)
-        .await
-    {
-        let _ = peer.send(ConnectionCommand::Send(ServerMessage::PeerDisconnected {
-            peer_role: role,
-        }));
-    }
-}
-
-async fn handle_lobby_socket(
-    mut socket: WebSocket,
-    state: AppState,
-    lobby_id: String,
-    participant_id: String,
-    token: String,
-) {
-    let (sender, mut commands) = mpsc::unbounded_channel();
-    let registration = match state
-        .lobbies
-        .register_connection(&lobby_id, &participant_id, &token, sender)
-        .await
-    {
-        Ok(registration) => registration,
-        Err(_) => {
-            let _ = socket.send(Message::Close(None)).await;
-            return;
-        }
-    };
-
-    if let Some(replaced) = registration.replaced {
-        let _ = replaced.send(LobbyConnectionCommand::Close);
-    }
-
-    if send_lobby_server(
-        &mut socket,
-        &LobbyServerMessage::Connected {
-            participant_id: participant_id.clone(),
-            host_participant_id: registration.host_participant_id,
-            participants: registration.participants,
-        },
-    )
-    .await
-    .is_err()
-    {
-        state
-            .lobbies
-            .unregister_connection(&lobby_id, &participant_id, registration.connection_id)
-            .await;
-        return;
-    }
-
-    for peer in registration.connected_peers {
-        let _ = peer.send(LobbyConnectionCommand::Send(
-            LobbyServerMessage::ParticipantConnected {
-                participant_id: participant_id.clone(),
-            },
-        ));
-    }
-
-    loop {
-        tokio::select! {
-            command = commands.recv() => {
-                match command {
-                    Some(LobbyConnectionCommand::Send(message)) => {
-                        if send_lobby_server(&mut socket, &message).await.is_err() {
-                            break;
-                        }
-                    }
-                    Some(LobbyConnectionCommand::Close) | None => {
-                        let _ = socket.send(Message::Close(None)).await;
-                        break;
-                    }
-                }
-            }
-            incoming = socket.recv() => {
-                match incoming {
-                    Some(Ok(Message::Text(text))) => {
-                        if !handle_lobby_client_text(
-                            &mut socket,
-                            &state,
-                            &lobby_id,
-                            &participant_id,
-                            &text,
-                        )
-                        .await
-                        {
-                            break;
-                        }
-                    }
-                    Some(Ok(Message::Binary(_))) => {
-                        let _ = socket.send(Message::Close(None)).await;
-                        break;
-                    }
-                    Some(Ok(Message::Ping(_))) => {}
-                    Some(Ok(Message::Pong(_))) => {}
-                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                }
-            }
-        }
-    }
-
-    for peer in state
-        .lobbies
-        .unregister_connection(&lobby_id, &participant_id, registration.connection_id)
-        .await
-    {
-        let _ = peer.send(LobbyConnectionCommand::Send(
-            LobbyServerMessage::ParticipantDisconnected {
-                participant_id: participant_id.clone(),
-            },
-        ));
-    }
-}
-
-async fn handle_client_text(
-    socket: &mut WebSocket,
-    state: &AppState,
-    room_id: &str,
-    role: PeerRole,
-    text: &str,
-) -> bool {
-    match parse_client_message(text) {
-        Ok(ClientMessage::Ping { nonce }) => send_server(socket, &ServerMessage::Pong { nonce })
-            .await
-            .is_ok(),
-        Ok(ClientMessage::Signal { payload }) => {
-            relay_signal(socket, state, room_id, role, payload).await
-        }
-        Err(ClientMessageError::TooLarge) => {
-            let _ = socket.send(Message::Close(None)).await;
-            false
-        }
-        Err(ClientMessageError::Invalid) => send_server(
-            socket,
-            &ServerMessage::Error {
-                code: "invalid-message",
-                message: "Expected a signaling envelope or ping",
-            },
-        )
-        .await
-        .is_ok(),
-    }
-}
-
-async fn handle_lobby_client_text(
-    socket: &mut WebSocket,
-    state: &AppState,
-    lobby_id: &str,
-    participant_id: &str,
-    text: &str,
-) -> bool {
-    match parse_lobby_client_message(text) {
-        Ok(LobbyClientMessage::Ping { nonce }) => {
-            send_lobby_server(socket, &LobbyServerMessage::Pong { nonce })
-                .await
-                .is_ok()
-        }
-        Ok(LobbyClientMessage::Signal { to, payload }) => {
-            relay_lobby_signal(socket, state, lobby_id, participant_id, &to, payload).await
-        }
-        Err(ClientMessageError::TooLarge) => {
-            let _ = socket.send(Message::Close(None)).await;
-            false
-        }
-        Err(ClientMessageError::Invalid) => send_lobby_server(
-            socket,
-            &LobbyServerMessage::Error {
-                code: "invalid-message",
-                message: "Expected a targeted signaling envelope or ping",
-            },
-        )
-        .await
-        .is_ok(),
-    }
-}
-
-async fn relay_signal(
-    socket: &mut WebSocket,
-    state: &AppState,
-    room_id: &str,
-    role: PeerRole,
-    payload: Value,
-) -> bool {
-    let Some(peer) = state.rooms.peer_sender(room_id, role).await else {
-        return send_server(
-            socket,
-            &ServerMessage::Error {
-                code: "peer-not-connected",
-                message: "The other peer is not connected to signaling yet",
-            },
-        )
-        .await
-        .is_ok();
-    };
-
-    if peer
-        .send(ConnectionCommand::Send(ServerMessage::Signal {
-            from: role,
-            payload,
-        }))
-        .is_ok()
-    {
-        true
-    } else {
-        send_server(
-            socket,
-            &ServerMessage::Error {
-                code: "peer-not-connected",
-                message: "The other peer is not connected to signaling yet",
-            },
-        )
-        .await
-        .is_ok()
-    }
-}
-
-async fn relay_lobby_signal(
-    socket: &mut WebSocket,
-    state: &AppState,
-    lobby_id: &str,
-    participant_id: &str,
-    target_id: &str,
-    payload: Value,
-) -> bool {
-    match state
-        .lobbies
-        .target_sender(lobby_id, participant_id, target_id)
-        .await
-    {
-        Ok(target) => {
-            if target
-                .send(LobbyConnectionCommand::Send(LobbyServerMessage::Signal {
-                    from: participant_id.to_owned(),
-                    payload,
-                }))
-                .is_ok()
-            {
-                true
-            } else {
-                send_lobby_server(
-                    socket,
-                    &LobbyServerMessage::Error {
-                        code: "participant-not-connected",
-                        message: "The target participant is not connected to signaling",
-                    },
-                )
-                .await
-                .is_ok()
-            }
-        }
-        Err(LobbyStoreError::TargetNotConnected) => send_lobby_server(
-            socket,
-            &LobbyServerMessage::Error {
-                code: "participant-not-connected",
-                message: "The target participant is not connected to signaling",
-            },
-        )
-        .await
-        .is_ok(),
-        Err(_) => send_lobby_server(
-            socket,
-            &LobbyServerMessage::Error {
-                code: "invalid-target",
-                message: "The signaling target is not a participant in this lobby",
-            },
-        )
-        .await
-        .is_ok(),
-    }
-}
-
-async fn send_server(socket: &mut WebSocket, message: &ServerMessage) -> Result<(), axum::Error> {
-    let text = serde_json::to_string(message).expect("server message should serialize");
-    socket.send(Message::Text(text.into())).await
-}
-
-async fn send_lobby_server(
-    socket: &mut WebSocket,
-    message: &LobbyServerMessage,
-) -> Result<(), axum::Error> {
-    let text = serde_json::to_string(message).expect("lobby server message should serialize");
-    socket.send(Message::Text(text.into())).await
 }
 
 fn validated_room_id(raw: &str) -> Option<String> {
