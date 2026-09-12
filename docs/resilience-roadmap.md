@@ -4,60 +4,86 @@ This roadmap keeps `multiplayer-setup-service` responsible for rendezvous/signal
 
 ## Status
 
-The reconnect/ICE recovery, TURN fallback, persistent verified cache, and signed-manifest foundations are implemented. Lobby renewal completes the remaining continuity item in Slice 1: only the existing host participant capability may extend signaling lifetime, each renewal is bounded, and renewal never persists or transfers gameplay state.
+The repository implementation described by this roadmap is complete.
 
-## Slice 1 — reconnect, renew, and ICE recovery
+- reconnect, initial-setup cancellation, lobby renewal, and ICE recovery are implemented and fail closed;
+- direct-first TURN fallback uses short-lived coturn-compatible credentials issued only to authenticated lobby participants;
+- bulk peer-content transfer detects positively identified relay paths and denies them by default, with explicit allow/capped policies available to games;
+- persistent verified chunks are release-namespaced, re-verified on hydration, bounded by a durable byte budget, and evicted with deterministic LRU policy under storage pressure;
+- execution-critical manifests use Ed25519 signatures against game-pinned keys, with overlapping-key rotation and explicit revocation support.
+
+Provisioning a production coturn instance, DNS, certificates, firewall rules, and secret rotation is an operator deployment responsibility rather than remaining repository implementation work. See `turn-deployment.md`.
+
+## Slice 1 — reconnect, renew, and ICE recovery — completed
 
 Goal: survive transient signaling and peer-transport failures without requiring a new game session.
 
-- Add an explicit `LobbySession` reconnect state machine with bounded exponential backoff and jitter-free deterministic retry delays for testability.
-- Reuse the existing participant capability to reconnect while the lobby is still valid; never mint a second participant identity during an automatic reconnect.
-- Rebuild the roster from the server `connected` event and reconcile missing/stale peer links idempotently.
-- Attempt `RTCPeerConnection.restartIce()` on failed/disconnected peers before replacing the peer connection.
-- Bound reconnect attempts and expose state events so the game can present recovery/failure UI.
-- Add a lobby-renew protocol guarded by the host participant capability, with a bounded extension policy and no gameplay persistence.
-- Tests: signaling close/reconnect, duplicate reconnect suppression, failed peer ICE restart, renewal authorization/expiry.
+Implemented:
 
-## Slice 2 — TURN fallback policy
+- an explicit `LobbySession` reconnect state machine with bounded deterministic retry delays;
+- reuse of the existing participant capability and participant identity during reconnect;
+- idempotent roster reconciliation after reconnect;
+- ICE restart before transport recovery is exhausted;
+- bounded recovery attempts with game-visible state events;
+- host-capability-authorized lobby renewal with a bounded lifetime cap;
+- initial `host()`/`join()` lifecycle cancellation so `close()` or a failed first signaling socket cannot leave a hidden reconnecting session;
+- deterministic coverage for reconnect, setup cancellation, ICE recovery, and renewal authorization/expiry.
+
+## Slice 2 — TURN fallback policy — completed
 
 Goal: make connectivity robust across restrictive NAT/firewall environments while retaining direct WebRTC when available.
 
-- Keep ICE server configuration game-owned.
-- Add an optional TURN credential endpoint contract that returns short-lived credentials without exposing deployment secrets to static GitHub Pages bundles.
-- Add a browser `icePolicy` helper: direct-first, then TURN-enabled ICE restart after a bounded connectivity timeout.
-- Ensure bulk content can be disabled or bandwidth-capped when the selected candidate pair is relayed.
-- Document a Hetzner `coturn` deployment with TLS/UDP/TCP firewall requirements and ephemeral credentials.
-- Tests: direct path unchanged, TURN fallback trigger, no permanent credential persistence, relay-aware content policy.
+Implemented:
 
-## Slice 3 — persistent verified P2P cache
+- game/session-owned ICE configuration with direct-first behavior;
+- `POST /lobbies/:lobbyId/turn-credentials`, authenticated by the existing participant capability;
+- short-lived coturn REST-auth credentials without exposing the coturn shared secret to static browser bundles;
+- browser credential fetch/refresh support wired into `ResilientLobbySession.setTurnIceServers()`;
+- TURN-enabled ICE restart during recovery instead of forcing all traffic through a relay;
+- selected-candidate-pair inspection for the content-only peer pool;
+- relay-aware bulk policy: deny by default, or explicit allow/byte-rate cap;
+- coturn deployment, TLS/UDP/TCP, firewall, credential lifetime, and secret-rotation documentation;
+- browser and black-box HTTP tests for credential boundaries and relay policy.
+
+## Slice 3 — persistent verified P2P cache — completed
 
 Goal: persist only cryptographically verified chunks across page reloads and sessions.
 
-- Introduce a storage adapter boundary with an IndexedDB/OPFS-backed implementation and an in-memory test implementation.
-- Persist chunks only after exact size + SHA-256 verification against the trusted manifest.
-- Namespace cache entries by game id, release/version fingerprint, file path, and chunk index.
-- Re-verify metadata on cache load; corrupt or stale entries are evicted fail-closed.
-- Add quota/budget controls, LRU-style eviction, and a game-visible storage-pressure signal.
-- Preserve optional seeding: cached chunks are advertised only after explicit player seeder opt-in.
-- Tests: reload resume, corrupt cache rejection, release isolation, idempotent writes, bounded eviction.
+Implemented:
 
-## Slice 4 — signed manifests
+- an IndexedDB persistence adapter plus an in-memory test adapter;
+- persistence only after exact size + SHA-256 verification against the trusted manifest;
+- namespace isolation by game id and release/version;
+- fail-closed re-verification during hydration with corrupt/stale entry eviction;
+- a 256 MiB default durable budget with configurable `maxBytes`;
+- deterministic LRU eviction and `storageUsage()` reporting;
+- a game-visible `onStoragePressure` callback with requested/persisted/evicted byte counts;
+- preservation of verified in-memory chunks when durable retention evicts them;
+- explicit player seeder opt-in before cached verified chunks are advertised;
+- coverage for reload resume, corruption rejection, release isolation, idempotence, LRU refresh, and bounded eviction.
+
+## Slice 4 — signed manifests — completed
 
 Goal: make release authenticity independent of transport peers and stronger than origin-only trust.
 
-- Define `multiplayer-content-manifest-v2` with canonical signing bytes and an Ed25519 signature envelope.
-- Keep SHA-256 chunk/file hashes as the byte-integrity authority.
-- Pin one or more trusted public verification keys in game configuration; never accept keys supplied by peers or lobby state.
-- Require a valid signature for `logic` content; optionally allow HTTPS-only v1 manifests for non-executable assets during migration.
-- Bind the signature to game id, version, paths, sizes, roles, chunk sizes, and hashes.
-- Add deterministic key-id handling for rotation and reject unknown/revoked keys.
-- Tests: valid signature, modified manifest rejection, unknown key rejection, key rotation, logic fail-closed behavior.
+Implemented:
 
-## Integration order
+- deterministic canonical signing bytes and an Ed25519 signature envelope;
+- SHA-256 chunk/file hashes as the byte-integrity authority;
+- one or more public verification keys pinned by game configuration, never accepted from peers or lobby state;
+- required signatures for execution-critical `logic` content, with explicit asset-only migration support for unsigned v1 manifests;
+- signatures bound to the complete trusted manifest contents;
+- deterministic key IDs, overlapping trusted keys for rotation, and an explicit `revokedKeyIds` deny-list that overrides pinned trust;
+- tests for valid signatures, modified manifests, unknown/revoked keys, rotation overlap, and unsigned-logic rejection.
 
-1. Slice 1 establishes continuity semantics required by all later work.
-2. Slice 2 adds network-path fallback without changing gameplay authority.
-3. Slice 3 makes verified content resumable across browser sessions.
-4. Slice 4 strengthens release authenticity and execution-critical content trust.
+## Invariants after completion
 
-Each slice should remain independently mergeable and must keep signaling payloads bounded, content sharing opt-in, and the Rust service ignorant of gameplay state and file bytes.
+All hardening remains additive and preserves the original boundaries:
+
+1. signaling payloads stay bounded and opaque to the Rust rendezvous service;
+2. gameplay rules and state mutation remain game-owned;
+3. peer-content distribution remains game opt-in and player seeding remains separately opt-in;
+4. peers never become authorities for manifests, hashes, logic, or release keys;
+5. TURN infrastructure remains external and its shared secret remains server-side;
+6. file bytes remain peer-to-peer and never pass through the setup service;
+7. gameplay connectivity takes priority over optional bulk content transfer.
