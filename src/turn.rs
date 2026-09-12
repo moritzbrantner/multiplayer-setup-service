@@ -2,9 +2,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
 use std::env;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -18,6 +16,8 @@ const DEFAULT_TURN_CREDENTIAL_TTL_SECONDS: u64 = 600;
 const MIN_TURN_CREDENTIAL_TTL_SECONDS: u64 = 60;
 const MAX_TURN_CREDENTIAL_TTL_SECONDS: u64 = 3_600;
 const HMAC_BLOCK_BYTES: usize = 64;
+const BASE64_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 #[derive(Clone, Debug)]
 struct TurnCredentialIssuer {
@@ -95,7 +95,7 @@ impl TurnCredentialIssuer {
     fn issue_at(&self, participant_id: &str, now_seconds: u64) -> TurnCredentialResponse {
         let expires_seconds = now_seconds.saturating_add(self.ttl.as_secs());
         let username = format!("{expires_seconds}:{participant_id}");
-        let credential = STANDARD.encode(hmac_sha1(&self.shared_secret, username.as_bytes()));
+        let credential = base64_standard(&hmac_sha1(&self.shared_secret, username.as_bytes()));
         TurnCredentialResponse {
             ice_servers: vec![TurnIceServer {
                 urls: self.urls.clone(),
@@ -173,8 +173,7 @@ fn is_turn_url(value: &str) -> bool {
 fn hmac_sha1(key: &[u8], message: &[u8]) -> [u8; 20] {
     let mut normalized_key = [0_u8; HMAC_BLOCK_BYTES];
     if key.len() > HMAC_BLOCK_BYTES {
-        let digest = Sha1::digest(key);
-        normalized_key[..digest.len()].copy_from_slice(&digest);
+        normalized_key[..20].copy_from_slice(&sha1_digest(key));
     } else {
         normalized_key[..key.len()].copy_from_slice(key);
     }
@@ -186,20 +185,133 @@ fn hmac_sha1(key: &[u8], message: &[u8]) -> [u8; 20] {
         outer_pad[index] ^= normalized_key[index];
     }
 
-    let mut inner = Sha1::new();
-    inner.update(inner_pad);
-    inner.update(message);
-    let inner_digest = inner.finalize();
+    let mut inner = Vec::with_capacity(HMAC_BLOCK_BYTES + message.len());
+    inner.extend_from_slice(&inner_pad);
+    inner.extend_from_slice(message);
+    let inner_digest = sha1_digest(&inner);
 
-    let mut outer = Sha1::new();
-    outer.update(outer_pad);
-    outer.update(inner_digest);
-    outer.finalize().into()
+    let mut outer = Vec::with_capacity(HMAC_BLOCK_BYTES + inner_digest.len());
+    outer.extend_from_slice(&outer_pad);
+    outer.extend_from_slice(&inner_digest);
+    sha1_digest(&outer)
+}
+
+fn sha1_digest(input: &[u8]) -> [u8; 20] {
+    let bit_length = (input.len() as u64).wrapping_mul(8);
+    let mut message = Vec::with_capacity(input.len() + 72);
+    message.extend_from_slice(input);
+    message.push(0x80);
+    while message.len() % HMAC_BLOCK_BYTES != 56 {
+        message.push(0);
+    }
+    message.extend_from_slice(&bit_length.to_be_bytes());
+
+    let mut h0 = 0x6745_2301_u32;
+    let mut h1 = 0xEFCD_AB89_u32;
+    let mut h2 = 0x98BA_DCFE_u32;
+    let mut h3 = 0x1032_5476_u32;
+    let mut h4 = 0xC3D2_E1F0_u32;
+
+    for chunk in message.chunks_exact(HMAC_BLOCK_BYTES) {
+        let mut words = [0_u32; 80];
+        for (index, word) in words.iter_mut().take(16).enumerate() {
+            let offset = index * 4;
+            *word = u32::from_be_bytes([
+                chunk[offset],
+                chunk[offset + 1],
+                chunk[offset + 2],
+                chunk[offset + 3],
+            ]);
+        }
+        for index in 16..80 {
+            words[index] = (words[index - 3]
+                ^ words[index - 8]
+                ^ words[index - 14]
+                ^ words[index - 16])
+                .rotate_left(1);
+        }
+
+        let mut a = h0;
+        let mut b = h1;
+        let mut c = h2;
+        let mut d = h3;
+        let mut e = h4;
+
+        for (index, word) in words.iter().enumerate() {
+            let (function, constant) = match index {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+            let temporary = a
+                .rotate_left(5)
+                .wrapping_add(function)
+                .wrapping_add(e)
+                .wrapping_add(constant)
+                .wrapping_add(*word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temporary;
+        }
+
+        h0 = h0.wrapping_add(a);
+        h1 = h1.wrapping_add(b);
+        h2 = h2.wrapping_add(c);
+        h3 = h3.wrapping_add(d);
+        h4 = h4.wrapping_add(e);
+    }
+
+    let mut digest = [0_u8; 20];
+    for (index, value) in [h0, h1, h2, h3, h4].into_iter().enumerate() {
+        digest[index * 4..index * 4 + 4].copy_from_slice(&value.to_be_bytes());
+    }
+    digest
+}
+
+fn base64_standard(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+
+        encoded.push(BASE64_ALPHABET[(first >> 2) as usize] as char);
+        encoded.push(
+            BASE64_ALPHABET[(((first & 0x03) << 4) | (second >> 4)) as usize] as char,
+        );
+        if chunk.len() >= 2 {
+            encoded.push(
+                BASE64_ALPHABET[(((second & 0x0f) << 2) | (third >> 6)) as usize] as char,
+            );
+        } else {
+            encoded.push('=');
+        }
+        if chunk.len() == 3 {
+            encoded.push(BASE64_ALPHABET[(third & 0x3f) as usize] as char);
+        } else {
+            encoded.push('=');
+        }
+    }
+    encoded
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sha1_matches_known_vector() {
+        assert_eq!(
+            sha1_digest(b"abc"),
+            [
+                0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e, 0x25, 0x71, 0x78,
+                0x50, 0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d,
+            ]
+        );
+    }
 
     #[test]
     fn hmac_sha1_matches_rfc_2202_vector() {
@@ -211,6 +323,13 @@ mod tests {
                 0x37, 0x8c, 0x8e, 0xf1, 0x46, 0xbe, 0x00,
             ]
         );
+    }
+
+    #[test]
+    fn base64_matches_known_vector() {
+        assert_eq!(base64_standard(b"Man"), "TWFu");
+        assert_eq!(base64_standard(b"Ma"), "TWE=");
+        assert_eq!(base64_standard(b"M"), "TQ==");
     }
 
     #[test]
