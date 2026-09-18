@@ -4,7 +4,7 @@ The multiplayer foundation uses broad CI performance guardrails in addition to c
 
 ## Browser workload
 
-`web-tests/performance.perf.mjs` runs on pinned Node 24 and verifies:
+`web-tests/performance.perf.ts` runs on pinned Node 24 and verifies:
 
 - 250,000 compact input commands can be applied to two independent 16-player state replicas within 3 seconds while producing identical state;
 - a complete 16-player mesh constructs 240 browser-side `RTCPeerConnection` endpoints representing exactly 120 logical peer relationships, with exactly one offer initiator per edge, within 1.5 seconds;

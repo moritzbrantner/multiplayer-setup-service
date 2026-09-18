@@ -2,5 +2,11 @@
   "name": "multiplayer-setup-service-workspace",
   "private": true,
   "packageManager": "bun@1.4.0",
-  "workspaces": ["web", "e2e"]
+  "workspaces": [
+    "web",
+    "e2e"
+  ],
+  "scripts": {
+    "build:web": "bun --cwd web run build"
+  }
 }

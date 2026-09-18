@@ -96,8 +96,8 @@ If the host is behind NAT, configure coturn's external/public address according 
 
 The browser helper requests credentials using the existing participant capability and installs them on the resilient lobby session:
 
-```js
-import { refreshTurnIceServers } from "./turn-credentials.js";
+```ts
+import { refreshTurnIceServers } from "./turn-credentials.ts";
 
 await refreshTurnIceServers(session);
 ```
@@ -112,7 +112,7 @@ Gameplay may need TURN to remain connected, but large peer-content transfers can
 
 Games may explicitly choose:
 
-```js
+```ts
 new ContentPeerPool({ session, relayPolicy: "deny" });  // default
 new ContentPeerPool({ session, relayPolicy: "allow" });
 new ContentPeerPool({

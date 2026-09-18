@@ -32,7 +32,7 @@ TURN policy remains separate and defaults to denying positively identified relay
 
 The existing Rust, HTTP, browser-model, performance and identical-workload runtime-profile checks remain in place. `Browser Acceptance` adds two isolated real Chromium contexts in desktop and touch-emulated configurations. It uses the real Rust binary, actual WebSockets, actual RTCPeerConnections and a loopback-only coturn fixture. It covers direct channels, capability-preserving signaling replacement, fresh content negotiation after recovery, verified chunk resume, forced relay with service-issued credentials, relay bulk denial/opt-in, and gameplay while bulk uploads are paused. Test retries are disabled. Browser versions, scoped acceptance results, and failure traces are retained as artifacts.
 
-Run locally after installing the repository Rust toolchain, Bun version from `package.json`, and coturn:
+Run locally after installing the repository Rust toolchain, Bun version from `package.tson`, and coturn:
 
 ```sh
 cargo build --release --locked --bin multiplayer-setup-service

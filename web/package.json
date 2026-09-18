@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test ../web-tests/*.test.mjs",
-    "test:perf": "node --test ../web-tests/*.perf.mjs",
-    "check": "bun run test && bun run test:perf"
+    "test": "node --test ../web-tests/*.test.ts",
+    "test:perf": "node --test ../web-tests/*.perf.ts",
+    "build": "bun ../scripts/build-web.ts",
+    "check": "bun run test && bun run test:perf && bun run build"
   }
 }

@@ -167,7 +167,7 @@ Do not expose port `8787` publicly; expose only the TLS/HTTP ports needed by Cad
 
 The browser owns `RTCPeerConnection`, game topology, and gameplay semantics. The setup API provides rendezvous/signaling and optional temporary TURN credentials.
 
-For restrictive networks, an authenticated lobby session can fetch and install short-lived TURN configuration with `web/turn-credentials.js`; `ResilientLobbySession` remains direct-first and uses TURN during recovery rather than forcing every peer through a relay.
+For restrictive networks, an authenticated lobby session can fetch and install short-lived TURN configuration with `web/turn-credentials.ts`; `ResilientLobbySession` remains direct-first and uses TURN during recovery rather than forcing every peer through a relay.
 
 Optional bulk asset sharing remains separately opt-in. `ContentPeerPool` denies positively identified TURN-relayed bulk sends by default; a game must explicitly choose an allow or byte-rate-limited relay policy.
 
@@ -175,14 +175,18 @@ See [`docs/peer-content-distribution.md`](docs/peer-content-distribution.md) and
 
 ## Development and validation
 
+Browser source is TypeScript-only. `bun --cwd web run build` transpiles it into disposable `dist/web/` JavaScript for browsers and GitHub Pages; generated JavaScript is not committed.
+
 ```bash
+python3 scripts/check-no-javascript-sources.py
+bun --cwd web run check
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets --all-features --locked
 cargo build --release --locked
 ```
 
-Browser modules/tests and performance guardrails run in the same read-only CI validation workflow. `Cargo.lock` is committed, and CI uses the exact Rust `1.98.0` toolchain.
+Browser TypeScript modules/tests and performance guardrails run in the same read-only CI validation workflow. `Cargo.lock` is committed, and CI uses the exact Rust `1.98.0` toolchain.
 
 ## Final hardening and browser acceptance
 

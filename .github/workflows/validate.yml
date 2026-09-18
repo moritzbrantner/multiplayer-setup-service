@@ -24,20 +24,24 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: ".node-version"
+      - name: Set up exact Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
       - name: Show toolchains
         run: |
           rustc --version --verbose
           cargo --version
           node --version
-      - name: Check browser modules
-        run: |
-          for file in web/*.js web/*.mjs web-tests/*.mjs; do
-            node --check "$file"
-          done
+          bun --version
+      - name: Reject committed JavaScript sources
+        run: python3 scripts/check-no-javascript-sources.py
       - name: Test browser networking models
-        run: node --test web-tests/*.test.mjs
+        run: bun --cwd web run test
       - name: Test browser performance guardrails
-        run: node --test web-tests/*.perf.mjs
+        run: bun --cwd web run test:perf
+      - name: Build browser TypeScript
+        run: bun --cwd web run build
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint

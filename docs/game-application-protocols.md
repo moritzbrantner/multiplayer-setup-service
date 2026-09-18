@@ -6,8 +6,8 @@ The browser client exposes two deliberately small helpers for game traffic after
 
 `GameCommands` wraps the existing reliable ordered gameplay channel with a namespaced command envelope.
 
-```js
-import { GameCommands } from "./game-commands.js";
+```ts
+import { GameCommands } from "./game-commands.ts";
 
 const commands = new GameCommands({ session });
 
@@ -29,8 +29,8 @@ Unrelated reliable-channel traffic is ignored. A message that explicitly claims 
 
 `GameFiles` adds a small request/reject layer above the existing trusted content-transfer implementation.
 
-```js
-import { GameFiles } from "./game-files.js";
+```ts
+import { GameFiles } from "./game-files.ts";
 
 const files = new GameFiles({ session, manifest });
 
@@ -70,4 +70,4 @@ Use `GameCommands` for state-changing application intent and `GameFiles` for man
 
 ## Validation
 
-`web-tests/game-protocols.test.mjs` covers command routing and handler failures, protocol isolation, verified end-to-end file requests, explicit rejection, timeouts, request correlation, trusted-manifest rejection, and the one-active-transfer-per-peer bound. Existing content-transfer tests continue to cover chunk hashes, whole-file verification, corrupted transfers, and opt-in content sharing.
+`web-tests/game-protocols.test.ts` covers command routing and handler failures, protocol isolation, verified end-to-end file requests, explicit rejection, timeouts, request correlation, trusted-manifest rejection, and the one-active-transfer-per-peer bound. Existing content-transfer tests continue to cover chunk hashes, whole-file verification, corrupted transfers, and opt-in content sharing.

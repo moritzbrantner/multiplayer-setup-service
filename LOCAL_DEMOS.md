@@ -41,7 +41,7 @@ The host-authoritative Pong model is only a demo networking strategy. It is not 
 
 ## Reusable browser foundation
 
-`web/session.js` owns only connection/session transport:
+`web/session.ts` owns only connection/session transport:
 
 - room creation/joining;
 - signaling WebSocket authentication;

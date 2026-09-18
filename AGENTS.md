@@ -12,9 +12,15 @@
 
 - Use the coding-tooling Pages surface for structural preflight when it can observe the repository; local/CI convergence evidence remains authoritative for execution and full-source findings.
 - Run cheap checks before broader checks. The canonical capability mapping is in `.coding-tooling.json`.
-- Keep Node, Bun, and Rust toolchains exact. `package.json` and `bun.lock` define the JavaScript package-manager state; `web/.node-version` and `e2e/.node-version` mirror the repository Node pin because those directories are independently discoverable package components.
+- Keep Node, Bun, and Rust toolchains exact. `package.json` and `bun.lock` define the browser package-manager state; `web/.node-version` and `e2e/.node-version` mirror the repository Node pin because those directories are independently discoverable package components.
 - Preserve exact-head evidence. Missing, skipped, stale, or earlier-head CI is not green evidence for the current revision.
 - Do not suppress or baseline a deterministic finding merely to make convergence green. Fix the repository-owned cause, or leave the finding visible when the detector boundary cannot prove the repository behavior.
+
+## TypeScript browser surface
+
+- Browser, browser-model test, and Playwright source is TypeScript only. Do not commit `.js` or `.mjs` under `web/`, `web-tests/`, or `e2e/`.
+- `bun --cwd web run build` is the canonical browser build. Generated JavaScript belongs only in ignored `dist/web/` or CI/Pages artifacts.
+- Preserve the existing module and authority boundaries during typing work; types describe the protocol rather than creating a second protocol authority.
 
 ## Change discipline
 
