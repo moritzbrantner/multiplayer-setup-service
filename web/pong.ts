@@ -1,6 +1,8 @@
+import { isRecord, errorMessage } from "./events.ts";
+import { requiredElement, canvasContext } from "./dom.ts";
 import { LobbyExperience, readInviteJoin } from "./lobby-experience.ts";
 import { movePaddleToward, mayAcceptPongScore } from "./pong-model.ts";
-import { PeerSession } from "./session.ts";
+import { DemoPeerSession as PeerSession } from "./demo-session.ts";
 
 const WIDTH = 800;
 const HEIGHT = 450;
@@ -13,31 +15,31 @@ const SNAPSHOT_INTERVAL = 1 / 30;
 const params = new URLSearchParams(location.search);
 const apiBase = params.get("api") ?? "http://127.0.0.1:8787";
 const inviteJoin = readInviteJoin({ search: location.search, codeParam: "room" });
-const hostButton = document.querySelector("#host");
-const joinButton = document.querySelector("#join");
-const roomInput = document.querySelector("#room");
-const status = document.querySelector("#status");
-const codeRow = document.querySelector("#codeRow");
-const code = document.querySelector("#code");
-const hostScore = document.querySelector("#hostScore");
-const guestScore = document.querySelector("#guestScore");
-const controlHint = document.querySelector("#controlHint");
-const resetButton = document.querySelector("#reset");
-const forgeScoreButton = document.querySelector("#forgeScore");
-const securityStatus = document.querySelector("#securityStatus");
-const canvas = document.querySelector("#game");
-const ctx = canvas.getContext("2d");
+const hostButton = requiredElement("#host", HTMLButtonElement);
+const joinButton = requiredElement("#join", HTMLButtonElement);
+const roomInput = requiredElement("#room", HTMLInputElement);
+const status = requiredElement("#status", HTMLElement);
+const codeRow = requiredElement("#codeRow", HTMLElement);
+const code = requiredElement("#code", HTMLElement);
+const hostScore = requiredElement("#hostScore", HTMLElement);
+const guestScore = requiredElement("#guestScore", HTMLElement);
+const controlHint = requiredElement("#controlHint", HTMLElement);
+const resetButton = requiredElement("#reset", HTMLButtonElement);
+const forgeScoreButton = requiredElement("#forgeScore", HTMLButtonElement);
+const securityStatus = requiredElement("#securityStatus", HTMLElement);
+const canvas = requiredElement("#game", HTMLCanvasElement);
+const ctx = canvasContext(canvas);
 
 if (inviteJoin.code) roomInput.value = inviteJoin.code;
 
-let session = null;
-let lobbyExperience = null;
+let session: PeerSession | null = null;
+let lobbyExperience: LobbyExperience | null = null;
 let ready = false;
 let previousTime = performance.now();
 let snapshotBudget = 0;
 let localDirection = 0;
 let targetGuestY = HEIGHT / 2;
-let guestView = null;
+let guestView: ReturnType<typeof snapshot> | null = null;
 
 const world = {
   leftY: HEIGHT / 2,
@@ -50,7 +52,7 @@ const world = {
   guestScore: 0,
 };
 
-function clampPaddle(y) {
+function clampPaddle(y: number) {
   return Math.max(PADDLE_H / 2, Math.min(HEIGHT - PADDLE_H / 2, y));
 }
 
@@ -73,12 +75,18 @@ function snapshot() {
   };
 }
 
-function updateScoreUi(host, guest) {
+function validSnapshot(value: unknown): value is ReturnType<typeof snapshot> {
+  if (!isRecord(value) || value.kind !== "pong-snapshot") return false;
+  return ["leftY", "rightY", "ballX", "ballY", "hostScore", "guestScore"].every((field) => typeof value[field] === "number" && Number.isFinite(value[field]));
+}
+
+function updateScoreUi(host: number, guest: number) {
   hostScore.textContent = String(host);
   guestScore.textContent = String(guest);
 }
 
-function score(side) {
+function score(side: "host" | "guest") {
+  if (!session) return;
   if (side === "host") world.hostScore += 1;
   else world.guestScore += 1;
   updateScoreUi(world.hostScore, world.guestScore);
@@ -90,7 +98,8 @@ function score(side) {
   resetBall(side === "host" ? 1 : -1);
 }
 
-function updateHost(dt) {
+function updateHost(dt: number) {
+  if (!session) return;
   world.leftY = clampPaddle(world.leftY + localDirection * PADDLE_SPEED * dt);
   world.rightY = movePaddleToward(
     world.rightY,
@@ -178,7 +187,7 @@ function draw() {
   ctx.fill();
 }
 
-function frame(now) {
+function frame(now: number) {
   const dt = Math.min(0.05, Math.max(0, (now - previousTime) / 1000));
   previousTime = now;
   if (ready && session?.role === "host") updateHost(dt);
@@ -187,22 +196,22 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-function sendGuestPaddle(y) {
+function sendGuestPaddle(y: number) {
   if (!ready || session?.role !== "guest") return;
   targetGuestY = clampPaddle(y);
   world.rightY = targetGuestY;
   session.sendRealtime({ kind: "pong-paddle", y: targetGuestY });
 }
 
-function setLocalPaddleFromPointer(event) {
+function setLocalPaddleFromPointer(event: PointerEvent) {
   if (!ready || !session) return;
   const rect = canvas.getBoundingClientRect();
   const y = ((event.clientY - rect.top) / rect.height) * HEIGHT;
-  if (session.role === "host") world.leftY = clampPaddle(y);
+  if (session?.role === "host") world.leftY = clampPaddle(y);
   else sendGuestPaddle(y);
 }
 
-function attachSession(next) {
+function attachSession(next: PeerSession) {
   session = next;
   lobbyExperience?.close();
   lobbyExperience = new LobbyExperience({
@@ -220,51 +229,53 @@ function attachSession(next) {
   });
   session.addEventListener("p2p-ready", () => {
     ready = true;
-    status.textContent = "Peer-to-peer ready; signaling released.";
-    controlHint.textContent = session.role === "host"
+    status.textContent = "Peer-to-peer ready; recovery available.";
+    controlHint.textContent = session?.role === "host"
       ? "You are the left paddle. Use W/S or drag/tap on the field."
       : "You are the right paddle. Use ↑/↓ or drag/tap on the field.";
-    resetButton.disabled = session.role !== "host";
-    forgeScoreButton.disabled = session.role !== "guest";
-    securityStatus.textContent = session.role === "host"
+    resetButton.disabled = session?.role !== "host";
+    forgeScoreButton.disabled = session?.role !== "guest";
+    securityStatus.textContent = session?.role === "host"
       ? "Host owns ball physics and scoring; guest score publications will be rejected."
       : "Guest may send paddle targets, but not scores or ball state.";
   });
   session.addEventListener("realtime", (event) => {
     const message = event.detail;
-    if (session.role === "host" && message?.kind === "pong-paddle" && Number.isFinite(message.y)) {
+    if (!isRecord(message)) return;
+    if (session?.role === "host" && message?.kind === "pong-paddle" && typeof message.y === "number" && Number.isFinite(message.y)) {
       targetGuestY = clampPaddle(message.y);
-    } else if (session.role === "guest" && message?.kind === "pong-snapshot") {
+    } else if (session?.role === "guest" && validSnapshot(message)) {
       guestView = message;
     }
   });
   session.addEventListener("reliable", (event) => {
     const message = event.detail;
+    if (!isRecord(message)) return;
     if (message?.kind === "pong-score") {
-      if (session.role === "host") {
+      if (session?.role === "host") {
         securityStatus.textContent = "Blocked forged guest score: only the host may publish score state.";
-        session.sendReliable({ kind: "pong-security-result", accepted: false, reason: "score-authority" });
-      } else if (mayAcceptPongScore(session.role, message)) {
+        next.sendReliable({ kind: "pong-security-result", accepted: false, reason: "score-authority" });
+      } else if (mayAcceptPongScore(session?.role ?? null, message)) {
         world.hostScore = message.hostScore;
         world.guestScore = message.guestScore;
         updateScoreUi(world.hostScore, world.guestScore);
       }
-    } else if (message?.kind === "pong-reset" && session.role === "guest") {
+    } else if (message?.kind === "pong-reset" && session?.role === "guest") {
       world.hostScore = 0;
       world.guestScore = 0;
       updateScoreUi(0, 0);
-    } else if (message?.kind === "pong-security-result" && session.role === "guest") {
+    } else if (message?.kind === "pong-security-result" && session?.role === "guest") {
       securityStatus.textContent = message.accepted
         ? "Unexpected: host accepted the probe."
         : "Host rejected the forged score as expected.";
     }
   });
   session.addEventListener("error", (event) => {
-    status.textContent = event.detail.error.message;
+    status.textContent = errorMessage(event.detail.error);
   });
 }
 
-async function connect(mode) {
+async function connect(mode: "host" | "join") {
   hostButton.disabled = true;
   joinButton.disabled = true;
   roomInput.disabled = true;
@@ -276,7 +287,7 @@ async function connect(mode) {
     else await next.join(roomInput.value);
     status.textContent = "Waiting for peer-to-peer connection…";
   } catch (error) {
-    status.textContent = error.message;
+    status.textContent = errorMessage(error);
     lobbyExperience?.close();
     lobbyExperience = null;
     next.close();
@@ -308,10 +319,10 @@ canvas.addEventListener("pointermove", (event) => {
 });
 window.addEventListener("keydown", (event) => {
   if (!ready || !session) return;
-  if (session.role === "host" && (event.key === "w" || event.key === "W")) localDirection = -1;
-  if (session.role === "host" && (event.key === "s" || event.key === "S")) localDirection = 1;
-  if (session.role === "guest" && event.key === "ArrowUp") sendGuestPaddle(world.rightY - 18);
-  if (session.role === "guest" && event.key === "ArrowDown") sendGuestPaddle(world.rightY + 18);
+  if (session?.role === "host" && (event.key === "w" || event.key === "W")) localDirection = -1;
+  if (session?.role === "host" && (event.key === "s" || event.key === "S")) localDirection = 1;
+  if (session?.role === "guest" && event.key === "ArrowUp") sendGuestPaddle(world.rightY - 18);
+  if (session?.role === "guest" && event.key === "ArrowDown") sendGuestPaddle(world.rightY + 18);
 });
 window.addEventListener("keyup", (event) => {
   if (session?.role === "host" && ["w", "W", "s", "S"].includes(event.key)) localDirection = 0;

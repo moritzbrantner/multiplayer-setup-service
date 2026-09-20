@@ -1,6 +1,13 @@
-function requireSession(session) {
+import { isRecord } from "./events.ts";
+export type TurnSession = {apiBase: string; lobbyId: string | null; participantId: string | null; participantToken: string | null; setTurnIceServers: (servers: RTCIceServer[]) => void};
+export type TurnCredentials = {iceServers: RTCIceServer[]; expiresAt: number};
+export class TurnCredentialError extends Error {
+  code: string;
+  constructor(message: string, code: string) { super(message); this.code = code; }
+}
+function requireSession(session: TurnSession): asserts session is TurnSession & {lobbyId: string; participantId: string; participantToken: string} {
   if (!session || typeof session !== "object") throw new Error("A lobby session is required");
-  for (const field of ["lobbyId", "participantId", "participantToken"]) {
+  for (const field of ["lobbyId", "participantId", "participantToken"] as const) {
     if (typeof session[field] !== "string" || session[field] === "") {
       throw new Error(`Lobby session is missing ${field}`);
     }
@@ -10,7 +17,7 @@ function requireSession(session) {
   }
 }
 
-function normalizeUrls(value) {
+function normalizeUrls(value: unknown): string[] {
   const urls = typeof value === "string" ? [value] : Array.isArray(value) ? value : null;
   if (!urls || urls.length === 0) throw new Error("TURN ICE server must define URLs");
   for (const url of urls) {
@@ -18,11 +25,14 @@ function normalizeUrls(value) {
       throw new Error("TURN ICE server URLs must use turn: or turns:");
     }
   }
-  return [...urls];
+  return urls.map((url: unknown) => {
+    if (typeof url !== "string") throw new Error("Invalid TURN URL");
+    return url;
+  });
 }
 
-function validateIceServer(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function validateIceServer(value: unknown): RTCIceServer {
+  if (!isRecord(value)) {
     throw new Error("TURN ICE server must be an object");
   }
   const urls = normalizeUrls(value.urls);
@@ -35,11 +45,11 @@ function validateIceServer(value) {
   return { urls, username: value.username, credential: value.credential };
 }
 
-async function readJson(response) {
+async function readJson(response: Response): Promise<TurnCredentials> {
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     const message = body?.error?.message ?? `TURN credential request failed with ${response.status}`;
-    throw new Error(message);
+    throw new TurnCredentialError(message, body?.error?.code ?? "turn-request-failed");
   }
   if (!body || !Array.isArray(body.iceServers) || body.iceServers.length === 0) {
     throw new Error("TURN credential response does not contain ICE servers");
@@ -54,8 +64,8 @@ async function readJson(response) {
 }
 
 export async function fetchTurnCredentials(
-  session,
-  { fetchImpl = globalThis.fetch } = {},
+  session: TurnSession,
+  { fetchImpl = globalThis.fetch, signal }: {fetchImpl?: typeof fetch; signal?: AbortSignal} = {},
 ) {
   requireSession(session);
   if (typeof fetchImpl !== "function") throw new Error("A fetch implementation is required");
@@ -65,6 +75,7 @@ export async function fetchTurnCredentials(
   const path = `/lobbies/${encodeURIComponent(session.lobbyId)}/turn-credentials`;
   return readJson(
     await fetchImpl(new URL(path, apiBase), {
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -78,7 +89,7 @@ export async function fetchTurnCredentials(
   );
 }
 
-export async function refreshTurnIceServers(session, options = {}) {
+export async function refreshTurnIceServers(session: TurnSession, options: {fetchImpl?: typeof fetch; signal?: AbortSignal} = {}) {
   const credentials = await fetchTurnCredentials(session, options);
   session.setTurnIceServers(credentials.iceServers);
   return credentials;

@@ -1,6 +1,9 @@
+import type { Card, CardGameState, CardView, CardIntent } from "./card-game-model.ts";
+import { isRecord, errorMessage } from "./events.ts";
+import { requiredElement } from "./dom.ts";
 import { GameCommands } from "./game-commands.ts";
 import { LobbyExperience, readInviteJoin } from "./lobby-experience.ts";
-import { LobbySession } from "./lobby-session.ts";
+import { DemoLobbySession as LobbySession } from "./demo-session.ts";
 import {
   applyCardIntent,
   canPlayCard,
@@ -8,58 +11,68 @@ import {
   createCardGame,
 } from "./card-game-model.ts";
 
+function validCard(value: unknown): value is Card {
+  return isRecord(value) && typeof value.id === "string" && typeof value.color === "string" && typeof value.value === "string";
+}
+function validCardView(value: unknown): value is CardView {
+  return isRecord(value) && value.type === "card-view" && validCard(value.topCard)
+    && typeof value.currentPlayerId === "string" && (value.winnerId === null || typeof value.winnerId === "string")
+    && typeof value.turnNumber === "number" && typeof value.deckCount === "number" && typeof value.lastEvent === "string"
+    && Array.isArray(value.hand) && value.hand.every(validCard)
+    && Array.isArray(value.players) && value.players.every((player: unknown) => isRecord(player) && typeof player.id === "string" && typeof player.handCount === "number");
+}
 const CARD_INTENT_COMMAND = "card.intent";
 const params = new URLSearchParams(window.location.search);
 const apiBase = params.get("api") || "http://127.0.0.1:8787";
 const inviteJoin = readInviteJoin({ search: window.location.search, codeParam: "lobby" });
-const hostButton = document.querySelector("#host");
-const joinButton = document.querySelector("#join");
-const codeInput = document.querySelector("#code");
-const startButton = document.querySelector("#start");
-const status = document.querySelector("#status");
-const lobbyState = document.querySelector("#lobby-state");
-const game = document.querySelector("#game");
-const topCard = document.querySelector("#top-card");
-const turn = document.querySelector("#turn");
-const players = document.querySelector("#players");
-const hand = document.querySelector("#hand");
-const drawButton = document.querySelector("#draw");
-const gameEvent = document.querySelector("#game-event");
-const forgeButton = document.querySelector("#forge-card");
-const replayButton = document.querySelector("#replay-intent");
-const securityResult = document.querySelector("#security-result");
+const hostButton = requiredElement("#host", HTMLButtonElement);
+const joinButton = requiredElement("#join", HTMLButtonElement);
+const codeInput = requiredElement("#code", HTMLInputElement);
+const startButton = requiredElement("#start", HTMLButtonElement);
+const status = requiredElement("#status", HTMLElement);
+const lobbyState = requiredElement("#lobby-state", HTMLElement);
+const game = requiredElement("#game", HTMLElement);
+const topCard = requiredElement("#top-card", HTMLElement);
+const turn = requiredElement("#turn", HTMLElement);
+const players = requiredElement("#players", HTMLElement);
+const hand = requiredElement("#hand", HTMLElement);
+const drawButton = requiredElement("#draw", HTMLButtonElement);
+const gameEvent = requiredElement("#game-event", HTMLElement);
+const forgeButton = requiredElement("#forge-card", HTMLButtonElement);
+const replayButton = requiredElement("#replay-intent", HTMLButtonElement);
+const securityResult = requiredElement("#security-result", HTMLElement);
 
 if (inviteJoin.code) codeInput.value = inviteJoin.code;
 
-let session = null;
-let commands = null;
-let lobbyExperience = null;
-let authoritativeState = null;
-let currentView = null;
+let session: LobbySession | null = null;
+let commands: GameCommands | null = null;
+let lobbyExperience: LobbyExperience | null = null;
+let authoritativeState: CardGameState | null = null;
+let currentView: CardView | null = null;
 let localSequence = 0;
-let lastIntent = null;
+let lastIntent: CardIntent | null = null;
 
-function shortId(id) {
+function shortId(id: string | null) {
   return id ? id.slice(0, 8) : "—";
 }
 
-function cardLabel(card) {
+function cardLabel(card: Card) {
   return `${card.color} ${card.value}`;
 }
 
 function seed32() {
   const values = new Uint32Array(1);
   crypto.getRandomValues(values);
-  return values[0];
+  return values[0]!;
 }
 
-function setSecurityResult(message, state = "neutral") {
+function setSecurityResult(message: string, state = "neutral") {
   securityResult.textContent = message;
   securityResult.dataset.state = state;
 }
 
-function rejectionCopy(reason) {
-  return {
+function rejectionCopy(reason: string) {
+  const messages: Record<string, string> = {
     "unknown-participant": "Rejected: sender is not in this lobby.",
     "malformed-intent": "Rejected: malformed card intent.",
     "stale-sequence": "Rejected: duplicate or replayed sequence number.",
@@ -69,13 +82,14 @@ function rejectionCopy(reason) {
     "deck-empty": "Rejected: the draw pile is empty.",
     "card-not-in-hand": "Rejected: the sender does not own that card.",
     "illegal-card": "Rejected: that card does not match the top color or value.",
-  }[reason] ?? `Rejected: ${reason}.`;
+  };
+  return messages[reason] ?? `Rejected: ${reason}.`;
 }
 
 function participantOrder() {
   if (!session) return [];
   const others = [...session.participants]
-    .filter((id) => id !== session.hostParticipantId)
+    .filter((id) => id !== session?.hostParticipantId)
     .sort();
   return session.hostParticipantId ? [session.hostParticipantId, ...others] : others;
 }
@@ -97,7 +111,8 @@ function renderLobbyState() {
   startButton.disabled = !lobbyReadyForStart() || Boolean(authoritativeState);
 }
 
-function renderView(view) {
+function renderView(view: CardView) {
+  if (!session) return;
   currentView = view;
   game.classList.remove("hidden");
   topCard.textContent = cardLabel(view.topCard);
@@ -142,17 +157,20 @@ function renderView(view) {
   replayButton.disabled = !lastIntent || !session || !currentView;
 }
 
-function deliverView(peerId) {
+function deliverView(peerId: string) {
+  if (!session || !authoritativeState) return;
   const view = cardViewFor(authoritativeState, peerId);
   if (peerId === session.participantId) renderView(view);
   else if (session.readyPeerIds().includes(peerId)) session.sendReliable(peerId, view);
 }
 
 function publishViews() {
+  if (!authoritativeState) return;
   for (const participantId of authoritativeState.participants) deliverView(participantId);
 }
 
-function sendRejection(peerId, reason) {
+function sendRejection(peerId: string, reason: string) {
+  if (!session) return;
   const copy = rejectionCopy(reason);
   if (peerId === session.participantId) setSecurityResult(copy, "rejected");
   else if (session.readyPeerIds().includes(peerId)) {
@@ -161,7 +179,7 @@ function sendRejection(peerId, reason) {
   status.textContent = `Host validation ${copy.toLowerCase()}`;
 }
 
-function handleHostIntent(peerId, intent) {
+function handleHostIntent(peerId: string, intent: unknown) {
   if (!authoritativeState) {
     sendRejection(peerId, "game-not-started");
     return;
@@ -175,8 +193,8 @@ function handleHostIntent(peerId, intent) {
   publishViews();
 }
 
-function transmitIntent(intent, { remember = true } = {}) {
-  if (!session || !commands || !currentView) return;
+function transmitIntent(intent: CardIntent, { remember = true } = {}) {
+  if (!session?.participantId || !session.hostParticipantId || !commands || !currentView) return;
   if (remember) lastIntent = structuredClone(intent);
   replayButton.disabled = !lastIntent;
   if (session.participantId === session.hostParticipantId) {
@@ -188,14 +206,15 @@ function transmitIntent(intent, { remember = true } = {}) {
   }
 }
 
-function sendIntent(action, cardId) {
+function sendIntent(action: "play" | "draw", cardId?: string) {
+  if (action === "play" && !cardId) return;
   localSequence += 1;
-  const intent = { type: "card-intent", action, seq: localSequence };
-  if (cardId !== undefined) intent.cardId = cardId;
-  transmitIntent(intent);
+  transmitIntent(action === "play" && cardId
+    ? { type: "card-intent", action, cardId, seq: localSequence }
+    : { type: "card-intent", action: "draw", seq: localSequence });
 }
 
-function wireSession(current, currentCommands) {
+function wireSession(current: LobbySession, currentCommands: GameCommands) {
   currentCommands.handle(CARD_INTENT_COMMAND, (intent, { peerId }) => {
     if (current !== session || currentCommands !== commands) return;
     if (current.participantId !== current.hostParticipantId) return;
@@ -203,11 +222,11 @@ function wireSession(current, currentCommands) {
   });
   currentCommands.addEventListener("error", (event) => {
     if (current !== session || currentCommands !== commands) return;
-    status.textContent = event.detail.error.message;
+    status.textContent = errorMessage(event.detail.error);
   });
 
   current.addEventListener("lobby", () => {
-    codeInput.value = current.displayCode;
+    codeInput.value = current.displayCode ?? "";
     status.textContent = `Lobby ${current.displayCode} created/joined. Waiting for players…`;
     hostButton.disabled = true;
     joinButton.disabled = true;
@@ -232,15 +251,15 @@ function wireSession(current, currentCommands) {
     if (current.participantId === current.hostParticipantId) return;
     const { peerId, data } = event.detail;
     if (peerId !== current.hostParticipantId) return;
-    if (data?.type === "card-view") {
+    if (validCardView(data)) {
       renderView(data);
       status.textContent = data.winnerId ? `Game finished: ${shortId(data.winnerId)} won.` : "Authoritative host view received.";
-    } else if (data?.type === "card-rejection") {
+    } else if (isRecord(data) && data.type === "card-rejection" && typeof data.reason === "string") {
       setSecurityResult(rejectionCopy(data.reason), "rejected");
     }
   });
   current.addEventListener("error", (event) => {
-    status.textContent = event.detail.error.message;
+    status.textContent = errorMessage(event.detail.error);
   });
 }
 
@@ -271,7 +290,7 @@ hostButton.addEventListener("click", async () => {
   try {
     await createSession().host(4);
   } catch (error) {
-    status.textContent = error.message;
+    status.textContent = errorMessage(error);
   }
 });
 
@@ -280,7 +299,7 @@ joinButton.addEventListener("click", async () => {
   try {
     await createSession().join(codeInput.value);
   } catch (error) {
-    status.textContent = error.message;
+    status.textContent = errorMessage(error);
   }
 });
 

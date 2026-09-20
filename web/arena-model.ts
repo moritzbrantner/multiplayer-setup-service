@@ -1,12 +1,16 @@
+import { isRecord } from "./events.ts";
+export type Position = {x: number; y: number};
+export type StepCommand = {type: "step"; participantId: string; seq: number; dx: number; dy: number};
+export type ArenaState = {players: Map<string, Position>; lastSequence: Map<string, number>; participants: Set<string>};
 const MIN_POSITION = 20;
 const MAX_POSITION = 980;
 const STEP_DISTANCE = 12;
 
-function clampPosition(value) {
+function clampPosition(value: number) {
   return Math.max(MIN_POSITION, Math.min(MAX_POSITION, value));
 }
 
-export function hashId(id) {
+export function hashId(id: string) {
   let hash = 2166136261;
   for (const char of id) {
     hash ^= char.charCodeAt(0);
@@ -15,25 +19,25 @@ export function hashId(id) {
   return hash >>> 0;
 }
 
-export function initialPlayer(id) {
+export function initialPlayer(id: string) {
   const hash = hashId(id);
   return { x: 80 + (hash % 841), y: 80 + ((hash >>> 10) % 841) };
 }
 
-export function validStep(message) {
+export function validStep(message: unknown): message is StepCommand {
   return (
-    message?.type === "step" &&
+    isRecord(message) && message.type === "step" &&
     typeof message.participantId === "string" &&
     message.participantId.length > 0 &&
-    Number.isInteger(message.seq) &&
+    typeof message.seq === "number" && Number.isInteger(message.seq) &&
     message.seq > 0 &&
-    Number.isInteger(message.dx) &&
-    Number.isInteger(message.dy) &&
+    typeof message.dx === "number" && Number.isInteger(message.dx) &&
+    typeof message.dy === "number" && Number.isInteger(message.dy) &&
     Math.abs(message.dx) + Math.abs(message.dy) === 1
   );
 }
 
-export function applyStepToState({ players, lastSequence, participants }, message) {
+export function applyStepToState({ players, lastSequence, participants }: ArenaState, message: unknown) {
   if (!validStep(message) || !participants.has(message.participantId)) return false;
 
   const previous = lastSequence.get(message.participantId) ?? 0;
@@ -48,13 +52,13 @@ export function applyStepToState({ players, lastSequence, participants }, messag
   return true;
 }
 
-export function applySnapshotEntry({ players, lastSequence, participants }, snapshot) {
+export function applySnapshotEntry({ players, lastSequence, participants }: ArenaState, snapshot: unknown) {
   if (
-    typeof snapshot?.id !== "string" ||
+    !isRecord(snapshot) || typeof snapshot.id !== "string" ||
     !participants.has(snapshot.id) ||
-    !Number.isInteger(snapshot.x) ||
-    !Number.isInteger(snapshot.y) ||
-    !Number.isInteger(snapshot.seq) ||
+    typeof snapshot.x !== "number" || !Number.isInteger(snapshot.x) ||
+    typeof snapshot.y !== "number" || !Number.isInteger(snapshot.y) ||
+    typeof snapshot.seq !== "number" || !Number.isInteger(snapshot.seq) ||
     snapshot.seq < 0
   ) {
     return false;
@@ -71,7 +75,7 @@ export function applySnapshotEntry({ players, lastSequence, participants }, snap
   return true;
 }
 
-export function topologyEdgeCount(topology, participantCount) {
+export function topologyEdgeCount(topology: string, participantCount: number) {
   if (topology !== "mesh" && topology !== "host") {
     throw new Error("Unknown topology");
   }
@@ -89,7 +93,7 @@ export function isTopologyReady({
   hostParticipantId,
   participantCount,
   readyPeerIds,
-}) {
+}: {topology: string; participantId: string; hostParticipantId: string; participantCount: number; readyPeerIds: string[]}) {
   const ready = new Set(readyPeerIds);
   if (topology === "mesh") {
     return ready.size === Math.max(0, participantCount - 1);

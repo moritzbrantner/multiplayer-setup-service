@@ -34,11 +34,17 @@ jobs:
         with:
           bun-version: 1.4.0
 
+      - name: Install locked TypeScript toolchain
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Typecheck browser sources
+        run: bun run typecheck
+
       - name: Reject committed JavaScript sources
         run: python3 scripts/check-no-javascript-sources.py
 
       - name: Build browser TypeScript
-        run: bun --cwd web run build
+        run: bun run --cwd web build
 
       - name: Check Pages asset graph
         run: |

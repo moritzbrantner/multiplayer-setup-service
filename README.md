@@ -167,7 +167,9 @@ Do not expose port `8787` publicly; expose only the TLS/HTTP ports needed by Cad
 
 The browser owns `RTCPeerConnection`, game topology, and gameplay semantics. The setup API provides rendezvous/signaling and optional temporary TURN credentials.
 
-For restrictive networks, an authenticated lobby session can fetch and install short-lived TURN configuration with `web/turn-credentials.ts`; `ResilientLobbySession` remains direct-first and uses TURN during recovery rather than forcing every peer through a relay.
+The demos use `DemoLobbySession` (or its two-player adapter) over `/lobbies`. They gather direct candidates with Google's public STUN service and fetch short-lived TURN credentials from the authenticated setup API. Credentials remain in memory and refresh before expiry. Deployments without TURN remain usable where a direct route exists. Applications can override `iceServers` to choose their own STUN provider.
+
+`ResilientLobbySession` retains healthy gameplay channels during signaling reconnects. Failed or stalled ICE attempts trigger bounded recovery, applying the latest TURN credentials on each restart; `iceConnectionTimeoutMs` defaults to 10 seconds and `peerRecoveryAttempts` to two. Library consumers supply their own ICE configuration and can fetch credentials through `web/turn-credentials.ts`.
 
 Optional bulk asset sharing remains separately opt-in. `ContentPeerPool` denies positively identified TURN-relayed bulk sends by default; a game must explicitly choose an allow or byte-rate-limited relay policy.
 
@@ -175,11 +177,13 @@ See [`docs/peer-content-distribution.md`](docs/peer-content-distribution.md) and
 
 ## Development and validation
 
-Browser source is TypeScript-only. `bun --cwd web run build` transpiles it into disposable `dist/web/` JavaScript for browsers and GitHub Pages; generated JavaScript is not committed.
+Browser, model-test, and Playwright source is TypeScript-only. Browser/build code and the Playwright harness are checked with strict TypeScript; model tests run through Node’s native type stripping. `bun run --cwd web build` transpiles it into disposable `dist/web/` JavaScript for browsers and GitHub Pages; generated JavaScript is not committed.
 
 ```bash
+bun install --frozen-lockfile --ignore-scripts
 python3 scripts/check-no-javascript-sources.py
-bun --cwd web run check
+bun run typecheck
+bun run --cwd web check
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets --all-features --locked

@@ -28,6 +28,8 @@ Execution-critical logic uses the signed-manifest boundary:
 - asset-only unsigned v1 manifests remain an explicit migration option;
 - file and chunk SHA-256 values remain the byte-integrity authority after signature verification.
 
+Use `fetchTrustedManifest(url, { trustedKeys, revokedKeyIds })` for the public loading path. It returns `{ manifest, manifestUrl }` only after origin/transport and signature policy checks. Set `allowUnsignedAssets: false` to require signatures for assets too. Keys and revocation policy must come from game configuration. `validateTrustedManifest` checks structure only; transfer and storage constructors expect an already authenticated manifest.
+
 A peer-advertised fingerprint is only a compatibility hint; it is never a source of trust.
 
 ## Transport layers

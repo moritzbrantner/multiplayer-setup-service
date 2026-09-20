@@ -1,8 +1,8 @@
 const DEFAULT_BYTES_PER_SECOND = 1024 * 1024;
 const DEFAULT_BURST_BYTES = 1024 * 1024;
-const sessionBudgets = new WeakMap();
+const sessionBudgets = new WeakMap<object, ContentUploadBudget>();
 
-function positiveInteger(value, name) {
+function positiveInteger(value: number, name: string) {
   if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive safe integer`);
 }
 
@@ -10,9 +10,9 @@ function abortError() {
   return new Error("Content upload was cancelled or paused for gameplay");
 }
 
-function delay(milliseconds, signals) {
-  return new Promise((resolve, reject) => {
-    let timer;
+function delay(milliseconds: number, signals: readonly (AbortSignal | undefined)[]) {
+  return new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => {
       clearTimeout(timer);
       for (const signal of signals) signal?.removeEventListener("abort", onAbort);
@@ -26,6 +26,17 @@ function delay(milliseconds, signals) {
 
 /** Aggregate token bucket for optional content, never gameplay channels. */
 export class ContentUploadBudget {
+  bytesPerSecond: number;
+  burstBytes: number;
+  maxPendingBytes: number;
+  maxPendingSends: number;
+  now: () => number;
+  tokens: number;
+  updated: number;
+  pendingBytes: number;
+  pendingSends: number;
+  paused: boolean;
+  pauseController: AbortController;
   constructor({
     bytesPerSecond = DEFAULT_BYTES_PER_SECOND,
     burstBytes = DEFAULT_BURST_BYTES,
@@ -50,7 +61,7 @@ export class ContentUploadBudget {
     this.pauseController = new AbortController();
   }
 
-  setPaused(paused) {
+  setPaused(paused: boolean) {
     if (typeof paused !== "boolean") throw new Error("paused must be a boolean");
     if (this.paused === paused) return;
     this.paused = paused;
@@ -58,7 +69,7 @@ export class ContentUploadBudget {
     else this.pauseController = new AbortController();
   }
 
-  reserve(bytes, { signal } = {}) {
+  reserve(bytes: number, { signal }: {signal?: AbortSignal | undefined} = {}) {
     if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.burstBytes) {
       throw new Error("Content frame exceeds the upload burst budget");
     }
@@ -98,7 +109,7 @@ export class ContentUploadBudget {
     });
   }
 
-  async consume(bytes, { signal } = {}) {
+  async consume(bytes: number, { signal }: {signal?: AbortSignal | undefined} = {}) {
     const reservation = this.reserve(bytes, { signal });
     try {
       await reservation.consume();
@@ -107,7 +118,7 @@ export class ContentUploadBudget {
     }
   }
 
-  async #consumeReserved(bytes, signals) {
+  async #consumeReserved(bytes: number, signals: readonly (AbortSignal | undefined)[]) {
     while (true) {
       if (this.paused || signals.some((signal) => signal?.aborted)) throw abortError();
       const now = Math.max(this.updated, this.#time());
@@ -128,7 +139,7 @@ export class ContentUploadBudget {
   }
 }
 
-export function sessionUploadBudget(session) {
+export function sessionUploadBudget(session: object) {
   let budget = sessionBudgets.get(session);
   if (!budget) {
     budget = new ContentUploadBudget();

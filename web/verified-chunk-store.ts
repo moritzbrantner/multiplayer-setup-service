@@ -1,3 +1,4 @@
+import type { ContentManifest } from "./content-manifest.ts";
 import {
   manifestFile,
   validateTrustedManifest,
@@ -5,11 +6,11 @@ import {
   verifyContentChunk,
 } from "./content-verification.ts";
 
-async function toBytes(value) {
-  if (value instanceof Uint8Array) return value;
+async function toBytes(value: unknown): Promise<Uint8Array<ArrayBuffer>> {
+  if (value instanceof Uint8Array) return new Uint8Array(value);
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    return new Uint8Array(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
   }
   if (typeof Blob !== "undefined" && value instanceof Blob) {
     return new Uint8Array(await value.arrayBuffer());
@@ -17,31 +18,33 @@ async function toBytes(value) {
   throw new Error("Verified chunk data must be binary");
 }
 
-function requireChunkedFile(manifest, path) {
+function requireChunkedFile(manifest: ContentManifest, path: string) {
   const file = manifestFile(manifest, path);
   if (!file.chunks || file.chunks.sha256.length === 0) {
     throw new Error(`Content does not define transferable trusted chunks: ${path}`);
   }
-  return file;
+  return { ...file, chunks: file.chunks };
 }
 
 export class VerifiedChunkStore {
-  constructor({ manifest } = {}) {
+  manifest: ContentManifest;
+  files: Map<string, Map<number, Uint8Array<ArrayBuffer>>>;
+  constructor({ manifest }: {manifest: ContentManifest}) {
     validateTrustedManifest(manifest);
     this.manifest = manifest;
     this.files = new Map();
   }
 
-  hasChunk(path, index) {
+  hasChunk(path: string, index: number) {
     return this.files.get(path)?.has(index) ?? false;
   }
 
-  availableChunks(path) {
+  availableChunks(path: string) {
     requireChunkedFile(this.manifest, path);
     return [...(this.files.get(path)?.keys() ?? [])].sort((left, right) => left - right);
   }
 
-  missingChunks(path) {
+  missingChunks(path: string) {
     const file = requireChunkedFile(this.manifest, path);
     const stored = this.files.get(path);
     const missing = [];
@@ -51,7 +54,7 @@ export class VerifiedChunkStore {
     return missing;
   }
 
-  async putChunk(path, index, value) {
+  async putChunk(path: string, index: number, value: unknown) {
     const bytes = await toBytes(value);
     const verification = await verifyContentChunk(this.manifest, path, index, bytes);
     let chunks = this.files.get(path);
@@ -63,7 +66,7 @@ export class VerifiedChunkStore {
     return verification;
   }
 
-  async putFile(path, value) {
+  async putFile(path: string, value: unknown) {
     const file = requireChunkedFile(this.manifest, path);
     const bytes = await toBytes(value);
     await verifyContent(this.manifest, path, bytes);
@@ -85,13 +88,13 @@ export class VerifiedChunkStore {
     };
   }
 
-  getChunk(path, index) {
+  getChunk(path: string, index: number) {
     requireChunkedFile(this.manifest, path);
     const chunk = this.files.get(path)?.get(index);
     return chunk ? chunk.slice() : null;
   }
 
-  async assembleFile(path) {
+  async assembleFile(path: string) {
     const file = requireChunkedFile(this.manifest, path);
     const chunks = this.files.get(path);
     if (!chunks || chunks.size !== file.chunks.sha256.length) {
@@ -110,7 +113,7 @@ export class VerifiedChunkStore {
     return bytes;
   }
 
-  clearPath(path) {
+  clearPath(path: string) {
     this.files.delete(path);
   }
 

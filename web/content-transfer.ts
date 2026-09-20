@@ -1,3 +1,17 @@
+import { TypedEventTarget } from "./events.ts";
+import type { ContentData } from "./events.ts";
+import type { ContentManifest, ManifestFile } from "./content-manifest.ts";
+import type { ContentTransport } from "./content-types.ts";
+type TransferIdentity = {peerId: string; path: string; transferId: number; requestId: string | null};
+export type TransferEvents = {
+ sent: TransferIdentity & {bytes: number; chunks: number};
+ started: TransferIdentity & {bytes: number; chunks: number};
+ progress: TransferIdentity & {receivedChunks: number; totalChunks: number};
+ file: TransferIdentity & {bytes: Uint8Array<ArrayBuffer>; verification: Awaited<ReturnType<typeof verifyContent>>};
+ failed: TransferIdentity & {error: unknown};
+ error: {peerId: string; error: unknown};
+};
+type IncomingTransfer = {peerId: string; transferId: number; requestId: string | null; file: ManifestFile; chunks: (Uint8Array | undefined)[]; receivedChunks: number};
 import {
   manifestFile,
   validateTrustedManifest,
@@ -15,11 +29,11 @@ const DEFAULT_MAX_TRANSFER_BYTES = 64 * 1024 * 1024;
 const MAX_REQUEST_ID_LENGTH = 64;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-function isObject(value) {
+function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-async function toBytes(value) {
+async function toBytes(value: unknown) {
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) {
@@ -31,11 +45,11 @@ async function toBytes(value) {
   throw new Error("Content transfer payload must be binary data");
 }
 
-function validTransferId(value) {
-  return Number.isInteger(value) && value > 0 && value <= 0xffff_ffff;
+function validTransferId(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 0xffff_ffff;
 }
 
-function optionalRequestId(value) {
+function optionalRequestId(value: unknown) {
   if (value == null) return null;
   if (
     typeof value !== "string" ||
@@ -48,11 +62,11 @@ function optionalRequestId(value) {
   return value;
 }
 
-function transferKey(peerId, transferId) {
+function transferKey(peerId: string, transferId: number) {
   return `${peerId}:${transferId}`;
 }
 
-function createChunkFrame(transferId, chunkIndex, payload) {
+function createChunkFrame(transferId: number, chunkIndex: number, payload: Uint8Array) {
   const frame = new Uint8Array(CHUNK_FRAME_HEADER_BYTES + payload.byteLength);
   const view = new DataView(frame.buffer);
   view.setUint32(0, CHUNK_FRAME_MAGIC);
@@ -62,7 +76,7 @@ function createChunkFrame(transferId, chunkIndex, payload) {
   return frame.buffer;
 }
 
-async function parseChunkFrame(value) {
+async function parseChunkFrame(value: unknown) {
   const bytes = await toBytes(value);
   if (bytes.byteLength < CHUNK_FRAME_HEADER_BYTES) {
     throw new Error("Content chunk frame is too short");
@@ -78,7 +92,7 @@ async function parseChunkFrame(value) {
   };
 }
 
-function parseControlMessage(value) {
+function parseControlMessage(value: unknown) {
   if (typeof value !== "string") return null;
   if (new TextEncoder().encode(value).byteLength > MAX_CONTROL_MESSAGE_BYTES) {
     throw new Error("Content control message is too large");
@@ -95,7 +109,7 @@ function parseControlMessage(value) {
   return message;
 }
 
-function requireTransferableFile(file, maxTransferBytes) {
+function requireTransferableFile(file: ManifestFile, maxTransferBytes: number): asserts file is ManifestFile & {chunks: {bytes: number; sha256: string[]}} {
   if (!file.chunks) throw new Error(`Trusted manifest does not define chunk hashes for ${file.path}`);
   if (file.chunks.bytes > MAX_P2P_CHUNK_BYTES) {
     throw new Error(
@@ -107,18 +121,26 @@ function requireTransferableFile(file, maxTransferBytes) {
   }
 }
 
-function randomTransferId(activeIds) {
+function randomTransferId(activeIds: Set<number>) {
   const values = new Uint32Array(1);
   for (let attempt = 0; attempt < 16; attempt += 1) {
     globalThis.crypto.getRandomValues(values);
-    const value = values[0];
+    const value = values[0]!;
     if (value !== 0 && !activeIds.has(value)) return value;
   }
   throw new Error("Could not allocate a unique content transfer id");
 }
 
-export class ContentTransfer extends EventTarget {
-  constructor({ session, manifest, maxTransferBytes = DEFAULT_MAX_TRANSFER_BYTES } = {}) {
+export class ContentTransfer extends TypedEventTarget<TransferEvents> {
+  session: ContentTransport;
+  manifest: ContentManifest;
+  maxTransferBytes: number;
+  incoming: Map<string, IncomingTransfer>;
+  outgoingIds: Set<number>;
+  peerChains: Map<string, Promise<void>>;
+  closed: boolean;
+  onContent: (event: CustomEvent<{peerId: string; data: ContentData}>) => void;
+  constructor({ session, manifest, maxTransferBytes = DEFAULT_MAX_TRANSFER_BYTES }: {session: ContentTransport; manifest: ContentManifest; maxTransferBytes?: number}) {
     super();
     if (!session || session.contentSharing !== true) {
       throw new Error("ContentTransfer requires a LobbySession with contentSharing enabled");
@@ -139,7 +161,7 @@ export class ContentTransfer extends EventTarget {
     session.addEventListener("content", this.onContent);
   }
 
-  async sendFile(peerId, path, value, { requestId = null } = {}) {
+  async sendFile(peerId: string, path: string, value: unknown, { requestId = null }: {requestId?: string | null} = {}) {
     if (this.closed) throw new Error("ContentTransfer is closed");
     const normalizedRequestId = optionalRequestId(requestId);
     const file = manifestFile(this.manifest, path);
@@ -201,7 +223,7 @@ export class ContentTransfer extends EventTarget {
     this.outgoingIds.clear();
   }
 
-  #enqueue(peerId, data) {
+  #enqueue(peerId: string, data: unknown) {
     if (this.closed || typeof peerId !== "string" || peerId === "") return;
     const previous = this.peerChains.get(peerId) ?? Promise.resolve();
     const next = previous
@@ -210,7 +232,7 @@ export class ContentTransfer extends EventTarget {
     this.peerChains.set(peerId, next);
   }
 
-  async #handleMessage(peerId, data) {
+  async #handleMessage(peerId: string, data: unknown) {
     const control = parseControlMessage(data);
     if (control) {
       if (control.type === "start") this.#startIncoming(peerId, control);
@@ -221,7 +243,7 @@ export class ContentTransfer extends EventTarget {
     await this.#acceptChunk(peerId, data);
   }
 
-  #startIncoming(peerId, message) {
+  #startIncoming(peerId: string, message: Record<string, unknown>) {
     if (!validTransferId(message.id)) throw new Error("Invalid content transfer id");
     if (typeof message.path !== "string") throw new Error("Content transfer path is required");
     const requestId = optionalRequestId(message.requestId);
@@ -274,7 +296,7 @@ export class ContentTransfer extends EventTarget {
     }
   }
 
-  async #acceptChunk(peerId, data) {
+  async #acceptChunk(peerId: string, data: unknown) {
     const frame = await parseChunkFrame(data);
     const key = transferKey(peerId, frame.transferId);
     const transfer = this.incoming.get(key);
@@ -311,7 +333,7 @@ export class ContentTransfer extends EventTarget {
     });
   }
 
-  async #completeIncoming(peerId, message) {
+  async #completeIncoming(peerId: string, message: Record<string, unknown>) {
     if (!validTransferId(message.id)) throw new Error("Invalid content transfer id");
     const key = transferKey(peerId, message.id);
     const transfer = this.incoming.get(key);
@@ -326,6 +348,7 @@ export class ContentTransfer extends EventTarget {
       const bytes = new Uint8Array(transfer.file.bytes);
       let offset = 0;
       for (const chunk of transfer.chunks) {
+        if (!chunk) throw new Error("Missing verified chunk");
         bytes.set(chunk, offset);
         offset += chunk.byteLength;
       }
@@ -344,17 +367,17 @@ export class ContentTransfer extends EventTarget {
     }
   }
 
-  #emitTransferFailure({ peerId, file, path, transferId, requestId, error }) {
+  #emitTransferFailure({ peerId, file, path, transferId, requestId, error }: {peerId: string; file?: ManifestFile; path?: string; transferId: number; requestId: string | null; error: unknown}) {
     this.#emit("failed", {
       peerId,
-      path: file?.path ?? path,
+      path: file?.path ?? path ?? "",
       transferId,
       requestId,
       error,
     });
   }
 
-  #emit(type, detail) {
+  #emit<K extends keyof TransferEvents>(type: K, detail: TransferEvents[K]) {
     this.dispatchEvent(new CustomEvent(type, { detail }));
   }
 }

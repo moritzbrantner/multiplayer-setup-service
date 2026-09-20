@@ -1,26 +1,28 @@
+import { isRecord, errorMessage } from "./events.ts";
+import { requiredElement } from "./dom.ts";
 import { LobbyExperience, readInviteJoin } from "./lobby-experience.ts";
-import { PeerSession } from "./session.ts";
+import { DemoPeerSession as PeerSession } from "./demo-session.ts";
 
 const params = new URLSearchParams(location.search);
 const apiBase = params.get("api") ?? "http://127.0.0.1:8787";
 const inviteJoin = readInviteJoin({ search: location.search, codeParam: "room" });
-const hostButton = document.querySelector("#host");
-const joinButton = document.querySelector("#join");
-const roomInput = document.querySelector("#room");
-const status = document.querySelector("#status");
-const codeRow = document.querySelector("#codeRow");
-const code = document.querySelector("#code");
-const boardNode = document.querySelector("#board");
-const gameStatus = document.querySelector("#gameStatus");
-const resetButton = document.querySelector("#reset");
+const hostButton = requiredElement("#host", HTMLButtonElement);
+const joinButton = requiredElement("#join", HTMLButtonElement);
+const roomInput = requiredElement("#room", HTMLInputElement);
+const status = requiredElement("#status", HTMLElement);
+const codeRow = requiredElement("#codeRow", HTMLElement);
+const code = requiredElement("#code", HTMLElement);
+const boardNode = requiredElement("#board", HTMLElement);
+const gameStatus = requiredElement("#gameStatus", HTMLElement);
+const resetButton = requiredElement("#reset", HTMLButtonElement);
 
 if (inviteJoin.code) roomInput.value = inviteJoin.code;
 
-let session = null;
-let lobbyExperience = null;
-let board = Array(9).fill(null);
+let session: PeerSession | null = null;
+let lobbyExperience: LobbyExperience | null = null;
+let board: ("X" | "O" | null)[] = Array(9).fill(null);
 let ply = 0;
-let winner = null;
+let winner: "X" | "O" | "draw" | null = null;
 let connected = false;
 
 const cells = Array.from({ length: 9 }, (_, index) => {
@@ -37,7 +39,7 @@ function boardKey(value = board) {
   return value.map((cell) => cell ?? "-").join("");
 }
 
-function markFor(role) {
+function markFor(role: string | null | undefined) {
   return role === "host" ? "X" : "O";
 }
 
@@ -50,10 +52,10 @@ function computeWinner() {
     [0, 1, 2], [3, 4, 5], [6, 7, 8],
     [0, 3, 6], [1, 4, 7], [2, 5, 8],
     [0, 4, 8], [2, 4, 6],
-  ];
+  ] as const;
   for (const [a, b, c] of lines) {
     if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-      return board[a];
+      return board[a] ?? null;
     }
   }
   return board.every(Boolean) ? "draw" : null;
@@ -71,39 +73,42 @@ function render() {
     gameStatus.textContent = "Draw.";
   } else if (winner) {
     gameStatus.textContent = `${winner} wins.`;
-  } else if (turnRole() === session.role) {
-    gameStatus.textContent = `Your turn (${markFor(session.role)}).`;
+  } else if (turnRole() === session?.role) {
+    gameStatus.textContent = `Your turn (${markFor(session?.role)}).`;
   } else {
     gameStatus.textContent = `Peer's turn (${markFor(turnRole())}).`;
   }
   resetButton.disabled = !connected || session?.role !== "host";
 }
 
-function applyMove({ index, role, expectedPly, before }) {
+function applyMove(value: unknown) {
+  if (!isRecord(value)) return false;
+  const { index, role, expectedPly, before } = value;
+  if (typeof index !== "number") return false;
   if (!Number.isInteger(index) || index < 0 || index >= 9) return false;
   if (role !== turnRole() || expectedPly !== ply || before !== boardKey() || board[index] !== null || winner) return false;
-  board[index] = markFor(role);
+  board[index] = markFor(typeof role === "string" ? role : null);
   ply += 1;
   winner = computeWinner();
   render();
   return true;
 }
 
-function makeLocalMove(index) {
+function makeLocalMove(index: number) {
   if (!session || turnRole() !== session.role) return;
   const move = { kind: "ttt-move", index, role: session.role, expectedPly: ply, before: boardKey() };
   if (applyMove(move)) session.sendReliable(move);
 }
 
-function resetGame(broadcast) {
+function resetGame(broadcast: boolean) {
   board = Array(9).fill(null);
   ply = 0;
   winner = null;
   render();
-  if (broadcast) session.sendReliable({ kind: "ttt-reset" });
+  if (broadcast) session?.sendReliable({ kind: "ttt-reset" });
 }
 
-function attachSession(next) {
+function attachSession(next: PeerSession) {
   session = next;
   lobbyExperience?.close();
   lobbyExperience = new LobbyExperience({
@@ -121,23 +126,24 @@ function attachSession(next) {
   });
   session.addEventListener("p2p-ready", () => {
     connected = true;
-    status.textContent = "Peer-to-peer ready; signaling released.";
+    status.textContent = "Peer-to-peer ready; recovery available.";
     render();
   });
   session.addEventListener("reliable", (event) => {
     const message = event.detail;
+    if (!isRecord(message)) return;
     if (message?.kind === "ttt-move" && !applyMove(message)) {
       status.textContent = "Rejected an invalid or desynchronized peer move.";
-    } else if (message?.kind === "ttt-reset" && session.role === "guest") {
+    } else if (message?.kind === "ttt-reset" && next.role === "guest") {
       resetGame(false);
     }
   });
   session.addEventListener("error", (event) => {
-    status.textContent = event.detail.error.message;
+    status.textContent = errorMessage(event.detail.error);
   });
 }
 
-async function connect(mode) {
+async function connect(mode: "host" | "join") {
   hostButton.disabled = true;
   joinButton.disabled = true;
   roomInput.disabled = true;
@@ -149,7 +155,7 @@ async function connect(mode) {
     else await next.join(roomInput.value);
     status.textContent = "Waiting for peer-to-peer connection…";
   } catch (error) {
-    status.textContent = error.message;
+    status.textContent = errorMessage(error);
     lobbyExperience?.close();
     lobbyExperience = null;
     next.close();

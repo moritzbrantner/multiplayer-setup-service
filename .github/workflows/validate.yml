@@ -34,14 +34,20 @@ jobs:
           cargo --version
           node --version
           bun --version
+      - name: Install locked TypeScript toolchain
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Typecheck browser sources
+        run: bun run typecheck
+
       - name: Reject committed JavaScript sources
         run: python3 scripts/check-no-javascript-sources.py
       - name: Test browser networking models
-        run: bun --cwd web run test
+        run: bun run --cwd web test
       - name: Test browser performance guardrails
-        run: bun --cwd web run test:perf
+        run: bun run --cwd web test:perf
       - name: Build browser TypeScript
-        run: bun --cwd web run build
+        run: bun run --cwd web build
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint

@@ -2,23 +2,46 @@
   "schemaVersion": 1,
   "profile": "repository-foundation-v1",
   "tiers": {
-    "fast": ["format:check", "lint", "test", "build"],
-    "integration": ["test:integration"],
-    "e2e": ["test:e2e"],
-    "performance": ["benchmark:smoke", "benchmark", "profile:runtime"]
+    "fast": [
+      "format:check",
+      "typecheck",
+      "lint",
+      "test",
+      "build"
+    ],
+    "integration": [
+      "test:integration"
+    ],
+    "e2e": [
+      "test:e2e"
+    ],
+    "performance": [
+      "benchmark:smoke",
+      "benchmark"
+    ]
   },
   "requiredCapabilities": [
     "format:check",
+    "typecheck",
     "lint",
     "test",
     "build",
     "test:integration",
     "test:e2e"
   ],
-  "optionalCapabilities": ["benchmark:smoke", "benchmark", "profile:runtime"],
+  "optionalCapabilities": [
+    "benchmark:smoke",
+    "benchmark"
+  ],
   "capabilityCommands": {
     ".": {
-      "format:check": ["cargo", "fmt", "--all", "--", "--check"],
+      "format:check": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
       "lint": [
         "cargo",
         "clippy",
@@ -29,8 +52,18 @@
         "-D",
         "warnings"
       ],
-      "test": ["cargo", "test", "--all-targets", "--all-features", "--locked"],
-      "build": ["cargo", "build", "--locked"],
+      "test": [
+        "cargo",
+        "test",
+        "--all-targets",
+        "--all-features",
+        "--locked"
+      ],
+      "build": [
+        "cargo",
+        "build",
+        "--locked"
+      ],
       "benchmark:smoke": [
         "cargo",
         "test",
@@ -50,22 +83,31 @@
         "--locked",
         "--",
         "--nocapture"
-      ],
-      "profile:runtime": [
-        "cargo",
-        "run",
-        "--release",
-        "--locked",
-        "--bin",
-        "profile-stores"
       ]
     },
     "web": {
-      "test:integration": ["bun", "run", "test"],
-      "benchmark:smoke": ["bun", "run", "test:perf"]
+      "test:integration": [
+        "bun",
+        "run",
+        "test"
+      ],
+      "benchmark:smoke": [
+        "bun",
+        "run",
+        "test:perf"
+      ],
+      "typecheck": [
+        "bun",
+        "run",
+        "typecheck"
+      ]
     },
     "e2e": {
-      "test:e2e": ["bun", "run", "test"]
+      "test:e2e": [
+        "bun",
+        "run",
+        "test"
+      ]
     }
   }
 }

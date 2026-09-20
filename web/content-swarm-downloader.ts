@@ -1,3 +1,9 @@
+import type { ContentManifest } from "./content-manifest.ts";
+import type { ContentSeederDiscovery } from "./content-seeder-discovery.ts";
+import type { ContentPeerPool } from "./content-peer-pool.ts";
+import type { ContentChunkExchange } from "./content-chunk-exchange.ts";
+import type { VerifiedChunkStore } from "./verified-chunk-store.ts";
+type DownloadResult = {path: string; bytes: Uint8Array<ArrayBuffer>; sha256: string; sources: string[]; chunks: number};
 import { manifestFile, validateTrustedManifest } from "./content-verification.ts";
 import { MAX_CHUNKS_PER_REQUEST } from "./content-chunk-exchange.ts";
 
@@ -6,21 +12,21 @@ const MAX_SWARM_SOURCES = 4;
 const DEFAULT_BATCH_SIZE = 32;
 const DEFAULT_PEER_READY_TIMEOUT_MS = 10_000;
 
-function requireChunkedFile(manifest, path) {
+function requireChunkedFile(manifest: ContentManifest, path: string) {
   const file = manifestFile(manifest, path);
   if (!file.chunks || file.chunks.sha256.length === 0) {
     throw new Error(`Content does not define transferable trusted chunks: ${path}`);
   }
-  return file;
+  return { ...file, chunks: file.chunks };
 }
 
-function validatePositiveInteger(value, field, maximum) {
+function validatePositiveInteger(value: number, field: string, maximum: number) {
   if (!Number.isInteger(value) || value < 1 || value > maximum) {
     throw new Error(`${field} must be between 1 and ${maximum}`);
   }
 }
 
-function chunks(values, size) {
+function chunks<T>(values: T[], size: number): T[][] {
   const batches = [];
   for (let offset = 0; offset < values.length; offset += size) {
     batches.push(values.slice(offset, offset + size));
@@ -28,11 +34,21 @@ function chunks(values, size) {
   return batches;
 }
 
-function sortedUnique(values) {
+function sortedUnique(values: string[]) {
   return [...new Set(values)].sort();
 }
 
 export class ContentSwarmDownloader extends EventTarget {
+  manifest: ContentManifest;
+  discovery: Pick<ContentSeederDiscovery, "seedersForPath">;
+  peerPool: ContentPeerPool;
+  exchange: Pick<ContentChunkExchange, "requestChunks">;
+  store: VerifiedChunkStore;
+  maxSources: number;
+  batchSize: number;
+  peerReadyTimeoutMs: number;
+  downloads: Map<string, Promise<DownloadResult>>;
+  closed: boolean;
   constructor({
     manifest,
     discovery,
@@ -42,7 +58,7 @@ export class ContentSwarmDownloader extends EventTarget {
     maxSources = DEFAULT_MAX_SOURCES,
     batchSize = DEFAULT_BATCH_SIZE,
     peerReadyTimeoutMs = DEFAULT_PEER_READY_TIMEOUT_MS,
-  } = {}) {
+  }: {manifest: ContentManifest; discovery: Pick<ContentSeederDiscovery, "seedersForPath">; peerPool: ContentPeerPool; exchange: Pick<ContentChunkExchange, "requestChunks">; store: VerifiedChunkStore; maxSources?: number; batchSize?: number; peerReadyTimeoutMs?: number}) {
     super();
     validateTrustedManifest(manifest);
     if (!discovery || typeof discovery.seedersForPath !== "function") {
@@ -89,7 +105,7 @@ export class ContentSwarmDownloader extends EventTarget {
     this.closed = false;
   }
 
-  download(path) {
+  download(path: string): Promise<DownloadResult> {
     if (this.closed) return Promise.reject(new Error("ContentSwarmDownloader is closed"));
     requireChunkedFile(this.manifest, path);
 
@@ -107,7 +123,7 @@ export class ContentSwarmDownloader extends EventTarget {
     this.closed = true;
   }
 
-  async #download(path) {
+  async #download(path: string): Promise<DownloadResult> {
     const file = requireChunkedFile(this.manifest, path);
     let missing = this.store.missingChunks(path);
     if (missing.length === 0) return this.#complete(path, file, []);
@@ -122,15 +138,15 @@ export class ContentSwarmDownloader extends EventTarget {
       throw new Error(`No advertised seeder became ready for ${path}`);
     }
 
-    const unavailableByPeer = new Map(sources.map((peerId) => [peerId, new Set()]));
-    const failedSources = new Set();
-    const sourcesUsed = new Set();
+    const unavailableByPeer = new Map(sources.map((peerId) => [peerId, new Set<number>()]));
+    const failedSources = new Set<string>();
+    const sourcesUsed = new Set<string>();
     let cursor = 0;
 
     this.#emitProgress(path, file, sources);
 
     while (missing.length > 0) {
-      const assignments = new Map(sources.map((peerId) => [peerId, []]));
+      const assignments = new Map(sources.map((peerId) => [peerId, [] as number[]]));
       const unassignable = [];
 
       for (const index of missing) {
@@ -142,14 +158,14 @@ export class ContentSwarmDownloader extends EventTarget {
           unassignable.push(index);
           continue;
         }
-        const peerId = eligible[cursor % eligible.length];
+        const peerId = eligible[cursor % eligible.length]!;
         cursor += 1;
-        assignments.get(peerId).push(index);
+        assignments.get(peerId)!.push(index);
       }
 
       const work = [];
       for (const peerId of sources) {
-        for (const batch of chunks(assignments.get(peerId), this.batchSize)) {
+        for (const batch of chunks(assignments.get(peerId) ?? [], this.batchSize)) {
           if (batch.length === 0) continue;
           sourcesUsed.add(peerId);
           work.push({
@@ -169,8 +185,8 @@ export class ContentSwarmDownloader extends EventTarget {
       const before = missing.length;
       const settled = await Promise.allSettled(work.map((entry) => entry.promise));
       for (let index = 0; index < settled.length; index += 1) {
-        const outcome = settled[index];
-        const entry = work[index];
+        const outcome = settled[index]!;
+        const entry = work[index]!;
         if (outcome.status === "rejected") {
           failedSources.add(entry.peerId);
           this.dispatchEvent(
@@ -207,7 +223,7 @@ export class ContentSwarmDownloader extends EventTarget {
     return this.#complete(path, file, [...sourcesUsed].sort());
   }
 
-  async #prepareSources(advertised) {
+  async #prepareSources(advertised: string[]) {
     const ready = new Set(this.peerPool.contentPeerIds());
     const selected = [];
 
@@ -237,10 +253,10 @@ export class ContentSwarmDownloader extends EventTarget {
     return selected;
   }
 
-  #waitForPeer(peerId) {
+  #waitForPeer(peerId: string) {
     if (this.peerPool.contentPeerIds().includes(peerId)) return Promise.resolve();
 
-    return new Promise((resolve, reject) => {
+    return new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         cleanup();
         reject(new Error(`Content peer ${peerId} did not become ready`));
@@ -252,17 +268,17 @@ export class ContentSwarmDownloader extends EventTarget {
         this.peerPool.removeEventListener("content-peer-closed", onClosed);
         this.peerPool.removeEventListener("error", onError);
       };
-      const onReady = (event) => {
+      const onReady = (event: CustomEvent<{peerId: string}>) => {
         if (event.detail?.peerId !== peerId) return;
         cleanup();
         resolve();
       };
-      const onClosed = (event) => {
+      const onClosed = (event: CustomEvent<{peerId: string}>) => {
         if (event.detail?.peerId !== peerId) return;
         cleanup();
         reject(new Error(`Content peer ${peerId} closed before becoming ready`));
       };
-      const onError = (event) => {
+      const onError = (event: CustomEvent<{peerId: string; error: unknown}>) => {
         if (event.detail?.peerId !== peerId) return;
         cleanup();
         reject(event.detail?.error ?? new Error(`Content peer ${peerId} failed`));
@@ -279,7 +295,7 @@ export class ContentSwarmDownloader extends EventTarget {
     });
   }
 
-  async #complete(path, file, sourcesUsed) {
+  async #complete(path: string, file: ReturnType<typeof requireChunkedFile>, sourcesUsed: string[]) {
     const bytes = await this.store.assembleFile(path);
     const result = {
       path,
@@ -292,7 +308,7 @@ export class ContentSwarmDownloader extends EventTarget {
     return result;
   }
 
-  #emitProgress(path, file, sources) {
+  #emitProgress(path: string, file: ReturnType<typeof requireChunkedFile>, sources: string[]) {
     const missing = this.store.missingChunks(path);
     this.dispatchEvent(
       new CustomEvent("progress", {

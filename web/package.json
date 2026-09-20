@@ -6,6 +6,7 @@
     "test": "node --test ../web-tests/*.test.ts",
     "test:perf": "node --test ../web-tests/*.perf.ts",
     "build": "bun ../scripts/build-web.ts",
-    "check": "bun run test && bun run test:perf && bun run build"
+    "check": "bun run typecheck && bun run test && bun run test:perf && bun run build",
+    "typecheck": "tsc --noEmit --project ../tsconfig.json"
   }
 }

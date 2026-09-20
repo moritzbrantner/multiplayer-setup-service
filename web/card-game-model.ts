@@ -1,7 +1,14 @@
+import { isRecord } from "./events.ts";
+export type Card = {id: string; color: string; value: string};
+export type CardIntent = {type: "card-intent"; seq: number} & ({action: "draw"; cardId?: never} | {action: "play"; cardId: string});
+export type CardGameState = {participants: string[]; hands: Record<string, Card[]>; deck: Card[]; topCard: Card; currentPlayerId: string; winnerId: string | null; lastSequences: Record<string, number>; turnNumber: number; lastEvent: string};
+type CardRejection = {accepted: false; reason: string};
+export type CardResult = CardRejection | {accepted: true; action: "draw" | "play"; card?: Card};
+export type CardView = ReturnType<typeof cardViewFor>;
 const COLORS = ["red", "yellow", "green", "blue"];
 const VALUES = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
-function assertParticipants(participantIds) {
+function assertParticipants(participantIds: string[]) {
   if (!Array.isArray(participantIds) || participantIds.length < 2 || participantIds.length > 4) {
     throw new Error("Card game requires between 2 and 4 participants");
   }
@@ -13,7 +20,7 @@ function assertParticipants(participantIds) {
   }
 }
 
-function nextRandom(seedState) {
+function nextRandom(seedState: {value: number}) {
   let value = seedState.value >>> 0;
   value ^= value << 13;
   value ^= value >>> 17;
@@ -35,7 +42,7 @@ export function createCardDeck() {
   return deck;
 }
 
-export function shuffleCardDeck(deck, seed) {
+export function shuffleCardDeck(deck: Card[], seed: number) {
   if (!Array.isArray(deck)) throw new Error("Deck must be an array");
   if (!Number.isSafeInteger(seed) || seed < 0 || seed > 0xffff_ffff) {
     throw new Error("Seed must be an unsigned 32-bit integer");
@@ -44,12 +51,12 @@ export function shuffleCardDeck(deck, seed) {
   const state = { value: seed || 0x9e37_79b9 };
   for (let index = shuffled.length - 1; index > 0; index -= 1) {
     const swapIndex = Math.floor(nextRandom(state) * (index + 1));
-    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex]!, shuffled[index]!];
   }
   return shuffled;
 }
 
-export function canPlayCard(card, topCard) {
+export function canPlayCard(card: Card | null | undefined, topCard: Card | null | undefined) {
   return Boolean(
     card &&
     topCard &&
@@ -59,25 +66,25 @@ export function canPlayCard(card, topCard) {
   );
 }
 
-export function createCardGame(participantIds, seed) {
+export function createCardGame(participantIds: string[], seed: number): CardGameState {
   assertParticipants(participantIds);
   const participants = [...participantIds];
   const deck = shuffleCardDeck(createCardDeck(), seed);
-  const hands = Object.fromEntries(participants.map((id) => [id, []]));
+  const hands: Record<string, Card[]> = Object.fromEntries(participants.map((id) => [id, []]));
 
   for (let round = 0; round < 7; round += 1) {
     for (const participantId of participants) {
-      hands[participantId].push(deck.pop());
+      hands[participantId]!.push(deck.pop()!);
     }
   }
 
-  const topCard = deck.pop();
+  const topCard = deck.pop()!;
   return {
     participants,
     hands,
     deck,
     topCard,
-    currentPlayerId: participants[0],
+    currentPlayerId: participants[0]!,
     winnerId: null,
     lastSequences: Object.fromEntries(participants.map((id) => [id, 0])),
     turnNumber: 1,
@@ -85,24 +92,24 @@ export function createCardGame(participantIds, seed) {
   };
 }
 
-export function validCardIntent(intent) {
-  if (!intent || intent.type !== "card-intent") return false;
-  if (!Number.isSafeInteger(intent.seq) || intent.seq < 1) return false;
+export function validCardIntent(intent: unknown): intent is CardIntent {
+  if (!isRecord(intent) || intent.type !== "card-intent") return false;
+  if (typeof intent.seq !== "number" || !Number.isSafeInteger(intent.seq) || intent.seq < 1) return false;
   if (intent.action === "draw") return intent.cardId === undefined;
   return intent.action === "play" && typeof intent.cardId === "string" && intent.cardId.length > 0;
 }
 
-function rejection(reason) {
+function rejection(reason: string): CardRejection {
   return { accepted: false, reason };
 }
 
-function advanceTurn(state) {
+function advanceTurn(state: CardGameState) {
   const currentIndex = state.participants.indexOf(state.currentPlayerId);
-  state.currentPlayerId = state.participants[(currentIndex + 1) % state.participants.length];
+  state.currentPlayerId = state.participants[(currentIndex + 1) % state.participants.length]!;
   state.turnNumber += 1;
 }
 
-export function applyCardIntent(state, peerId, intent) {
+export function applyCardIntent(state: CardGameState, peerId: string, intent: unknown): CardResult {
   if (!state || !state.participants?.includes(peerId)) return rejection("unknown-participant");
   if (!validCardIntent(intent)) return rejection("malformed-intent");
 
@@ -114,9 +121,10 @@ export function applyCardIntent(state, peerId, intent) {
   if (state.currentPlayerId !== peerId) return rejection("not-your-turn");
 
   const hand = state.hands[peerId];
+  if (!hand) return rejection("unknown-participant");
   if (intent.action === "draw") {
     if (state.deck.length === 0) return rejection("deck-empty");
-    hand.push(state.deck.pop());
+    hand.push(state.deck.pop()!);
     state.lastEvent = `${peerId} drew a card.`;
     advanceTurn(state);
     return { accepted: true, action: "draw" };
@@ -124,7 +132,7 @@ export function applyCardIntent(state, peerId, intent) {
 
   const cardIndex = hand.findIndex((card) => card.id === intent.cardId);
   if (cardIndex < 0) return rejection("card-not-in-hand");
-  const card = hand[cardIndex];
+  const card = hand[cardIndex]!;
   if (!canPlayCard(card, state.topCard)) return rejection("illegal-card");
 
   hand.splice(cardIndex, 1);
@@ -139,7 +147,7 @@ export function applyCardIntent(state, peerId, intent) {
   return { accepted: true, action: "play", card: { ...card } };
 }
 
-export function cardViewFor(state, viewerId) {
+export function cardViewFor(state: CardGameState, viewerId: string) {
   if (!state?.participants?.includes(viewerId)) throw new Error("Viewer must be a participant");
   return {
     type: "card-view",
@@ -148,8 +156,8 @@ export function cardViewFor(state, viewerId) {
     winnerId: state.winnerId,
     turnNumber: state.turnNumber,
     deckCount: state.deck.length,
-    hand: state.hands[viewerId].map((card) => ({ ...card })),
-    players: state.participants.map((id) => ({ id, handCount: state.hands[id].length })),
+    hand: state.hands[viewerId]!.map((card) => ({ ...card })),
+    players: state.participants.map((id) => ({ id, handCount: state.hands[id]!.length })),
     lastEvent: state.lastEvent,
   };
 }

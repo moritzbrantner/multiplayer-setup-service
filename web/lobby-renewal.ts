@@ -1,4 +1,5 @@
-async function readJson(response) {
+import type { ResilientLobbySession } from "./resilient-lobby-session.ts";
+async function readJson(response: Response): Promise<{expiresAt: number; maxExpiresAt: number}> {
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     const message = body?.error?.message ?? `Request failed with ${response.status}`;
@@ -7,14 +8,14 @@ async function readJson(response) {
   return body;
 }
 
-function requiredString(value, field) {
+function requiredString(value: unknown, field: string) {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`${field} is required`);
   }
   return value;
 }
 
-export async function renewLobbySession(session) {
+export async function renewLobbySession(session: ResilientLobbySession) {
   if (!session || typeof session !== "object") {
     throw new Error("A lobby session is required");
   }

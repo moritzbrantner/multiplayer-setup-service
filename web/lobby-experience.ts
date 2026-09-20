@@ -1,3 +1,12 @@
+import { isRecord } from "./events.ts";
+import type { Timer } from "./events.ts";
+import type { ResilientLobbySession } from "./resilient-lobby-session.ts";
+import type { PeerSession } from "./session.ts";
+import type { DemoPeerSession } from "./demo-session.ts";
+type ExperienceSession = ResilientLobbySession | PeerSession | DemoPeerSession;
+type InviteExtras = Record<string, string | number | boolean | null | undefined>;
+type ExperienceOptions = {session: ExperienceSession; root?: Document; locationHref?: string; codeParam?: string; inviteTitle?: string; inviteExtras?: (session: ExperienceSession) => InviteExtras; pingIntervalMs?: number};
+type ChatMessage = {kind: string; id: string; senderId: string; text: string};
 const CHAT_KIND = "multiplayer-lobby-chat-v1";
 const PING_KIND = "multiplayer-lobby-ping-v1";
 const PONG_KIND = "multiplayer-lobby-pong-v1";
@@ -11,21 +20,21 @@ function nowMs() {
   return globalThis.performance?.now?.() ?? Date.now();
 }
 
-function randomId(prefix) {
-  if (globalThis.crypto?.randomUUID) return `${prefix}-${crypto.randomUUID()}`;
+function randomId(prefix: string) {
+  if (typeof globalThis.crypto?.randomUUID === "function") return `${prefix}-${crypto.randomUUID()}`;
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function median(values) {
+function median(values: number[]) {
   if (values.length === 0) return null;
   const sorted = [...values].sort((left, right) => left - right);
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0
-    ? (sorted[middle - 1] + sorted[middle]) / 2
-    : sorted[middle];
+    ? (sorted[middle - 1]! + sorted[middle]!) / 2
+    : sorted[middle]!;
 }
 
-export function normalizeChatText(value) {
+export function normalizeChatText(value: unknown) {
   if (typeof value !== "string") return null;
   const text = value.trim();
   if (!text || text.length > MAX_CHAT_MESSAGE_LENGTH) return null;
@@ -39,7 +48,7 @@ export function buildInviteUrl({
   apiBase,
   extras = {},
   autoJoin = true,
-}) {
+}: {locationHref: string; code: string; codeParam?: string; apiBase?: string; extras?: InviteExtras; autoJoin?: boolean}) {
   const normalizedCode = String(code ?? "").trim();
   if (!normalizedCode) throw new Error("Invite code is required");
   const url = new URL(locationHref);
@@ -55,7 +64,7 @@ export function buildInviteUrl({
   return url.toString();
 }
 
-export function readInviteJoin({ search, codeParam = "lobby" }) {
+export function readInviteJoin({ search, codeParam = "lobby" }: {search: string; codeParam?: string}) {
   const params = new URLSearchParams(search);
   const code = String(params.get(codeParam) ?? "").trim();
   return {
@@ -64,10 +73,10 @@ export function readInviteJoin({ search, codeParam = "lobby" }) {
   };
 }
 
-export function summarizeLatency(sampleMap) {
+export function summarizeLatency(sampleMap: Map<string, number[]>) {
   const peerMedians = [...sampleMap.values()]
     .map((samples) => median(samples))
-    .filter((value) => Number.isFinite(value));
+    .filter((value): value is number => value !== null && Number.isFinite(value));
   if (peerMedians.length === 0) return { text: "Ping —", quality: "unknown" };
   const rounded = peerMedians.map((value) => Math.max(0, Math.round(value)));
   const worst = Math.max(...rounded);
@@ -79,8 +88,8 @@ export function summarizeLatency(sampleMap) {
   };
 }
 
-async function copyText(text) {
-  if (globalThis.navigator?.clipboard?.writeText) {
+async function copyText(text: string) {
+  if (typeof globalThis.navigator?.clipboard?.writeText === "function") {
     await navigator.clipboard.writeText(text);
     return;
   }
@@ -100,16 +109,37 @@ async function copyText(text) {
   if (!copied) throw new Error("Clipboard is unavailable");
 }
 
-function isMultipartySession(session) {
-  return typeof session?.readyPeerIds === "function" && "participantId" in session;
+function isMultipartySession(session: ExperienceSession): session is ResilientLobbySession {
+  return "readyPeerIds" in session && typeof session.readyPeerIds === "function" && "participantId" in session;
 }
 
-function shortId(id) {
+function shortId(id: string | null) {
   if (!id) return "Peer";
   return String(id).slice(0, 8);
 }
 
 export class LobbyExperience {
+  session: ExperienceSession;
+  root: Document;
+  locationHref: string;
+  codeParam: string;
+  inviteTitle: string;
+  inviteExtras: (session: ExperienceSession) => InviteExtras;
+  pingIntervalMs: number;
+  abortController: AbortController;
+  inviteUrl: string | null;
+  pingTimer: Timer | null;
+  pendingPings: Map<string, {peerId: string; startedAt: number}>;
+  latencySamples: Map<string, number[]>;
+  seenChatIds: Set<string>;
+  chatLog: HTMLElement | null;
+  chatForm: HTMLFormElement | null;
+  chatInput: HTMLInputElement | null;
+  chatSend: HTMLButtonElement | null;
+  inviteRow: HTMLElement | null;
+  inviteNodes: HTMLElement[];
+  shareButtons: HTMLButtonElement[];
+  latencyNodes: HTMLElement[];
   constructor({
     session,
     root = document,
@@ -118,7 +148,7 @@ export class LobbyExperience {
     inviteTitle = "Join my multiplayer lobby",
     inviteExtras = () => ({}),
     pingIntervalMs = PING_INTERVAL_MS,
-  }) {
+  }: ExperienceOptions) {
     if (!session) throw new Error("LobbyExperience requires a session");
     this.session = session;
     this.root = root;
@@ -127,21 +157,20 @@ export class LobbyExperience {
     this.inviteTitle = inviteTitle;
     this.inviteExtras = inviteExtras;
     this.pingIntervalMs = pingIntervalMs;
-    this.multiparty = isMultipartySession(session);
     this.abortController = new AbortController();
     this.inviteUrl = null;
     this.pingTimer = null;
     this.pendingPings = new Map();
     this.latencySamples = new Map();
     this.seenChatIds = new Set();
-    this.chatLog = root.querySelector?.("[data-lobby-chat-log]") ?? null;
-    this.chatForm = root.querySelector?.("[data-lobby-chat-form]") ?? null;
-    this.chatInput = root.querySelector?.("[data-lobby-chat-input]") ?? null;
-    this.chatSend = root.querySelector?.("[data-lobby-chat-send]") ?? null;
-    this.inviteRow = root.querySelector?.("[data-lobby-invite-row]") ?? null;
-    this.inviteNodes = [...(root.querySelectorAll?.("[data-lobby-invite]") ?? [])];
-    this.shareButtons = [...(root.querySelectorAll?.("[data-lobby-share]") ?? [])];
-    this.latencyNodes = [...(root.querySelectorAll?.("[data-lobby-latency]") ?? [])];
+    this.chatLog = root.querySelector<HTMLElement>("[data-lobby-chat-log]") ?? null;
+    this.chatForm = root.querySelector<HTMLFormElement>("[data-lobby-chat-form]") ?? null;
+    this.chatInput = root.querySelector<HTMLInputElement>("[data-lobby-chat-input]") ?? null;
+    this.chatSend = root.querySelector<HTMLButtonElement>("[data-lobby-chat-send]") ?? null;
+    this.inviteRow = root.querySelector<HTMLElement>("[data-lobby-invite-row]") ?? null;
+    this.inviteNodes = [...(root.querySelectorAll<HTMLElement>("[data-lobby-invite]") ?? [])];
+    this.shareButtons = [...(root.querySelectorAll<HTMLButtonElement>("[data-lobby-share]") ?? [])];
+    this.latencyNodes = [...(root.querySelectorAll<HTMLElement>("[data-lobby-latency]") ?? [])];
 
     this.#wireDom();
     this.#wireSession();
@@ -156,7 +185,7 @@ export class LobbyExperience {
     this.pendingPings.clear();
   }
 
-  sendChat(value) {
+  sendChat(value: unknown) {
     const text = normalizeChatText(value);
     if (!text || this.#readyPeerIds().length === 0) return false;
     const senderId = this.#localId();
@@ -193,7 +222,9 @@ export class LobbyExperience {
 
   #wireSession() {
     const signal = this.abortController.signal;
-    const publishInvite = (event) => this.#setInvite(event.detail?.displayCode);
+    const publishInvite = (event: Event) => {
+      if (event instanceof CustomEvent && isRecord(event.detail)) this.#setInvite(event.detail.displayCode);
+    };
     this.session.addEventListener("room", publishInvite, { signal });
     this.session.addEventListener("lobby", publishInvite, { signal });
     this.session.addEventListener("p2p-ready", () => {
@@ -206,8 +237,8 @@ export class LobbyExperience {
       this.#probeLatency();
     }, { signal });
     this.session.addEventListener("participant-disconnected", (event) => {
-      const peerId = event.detail?.participantId;
-      if (peerId) this.latencySamples.delete(peerId);
+      const peerId = event instanceof CustomEvent && isRecord(event.detail) ? event.detail.participantId : null;
+      if (typeof peerId === "string") this.latencySamples.delete(peerId);
       this.#updateChatAvailability();
       this.#renderLatency();
     }, { signal });
@@ -219,31 +250,32 @@ export class LobbyExperience {
       this.#updateChatAvailability();
       this.#renderLatency();
     }, { signal });
-    this.session.addEventListener("reliable", (event) => this.#handleReliable(event.detail), { signal });
-    this.session.addEventListener("realtime", (event) => this.#handleRealtime(event.detail), { signal });
+    this.session.addEventListener("reliable", (event) => { if (event instanceof CustomEvent) this.#handleReliable(event.detail); }, { signal });
+    this.session.addEventListener("realtime", (event) => { if (event instanceof CustomEvent) this.#handleRealtime(event.detail); }, { signal });
   }
 
   #localId() {
-    return this.multiparty ? this.session.participantId : this.session.role;
+    return isMultipartySession(this.session) ? this.session.participantId : this.session.role;
   }
 
   #hostId() {
-    return this.multiparty ? this.session.hostParticipantId : "host";
+    return isMultipartySession(this.session) ? this.session.hostParticipantId : "host";
   }
 
   #singlePeerId() {
+    if (isMultipartySession(this.session)) return null;
     return this.session.role === "host" ? "guest" : this.session.role === "guest" ? "host" : null;
   }
 
   #readyPeerIds() {
-    if (this.multiparty) return this.session.readyPeerIds();
+    if (isMultipartySession(this.session)) return this.session.readyPeerIds();
     const peerId = this.#singlePeerId();
     return this.session.reliable?.readyState === "open" && this.session.realtime?.readyState === "open" && peerId
       ? [peerId]
       : [];
   }
 
-  #setInvite(code) {
+  #setInvite(code: unknown) {
     const normalizedCode = String(code ?? "").trim();
     if (!normalizedCode) return;
     this.inviteUrl = buildInviteUrl({
@@ -263,11 +295,11 @@ export class LobbyExperience {
     this.inviteRow?.classList?.remove("hidden");
   }
 
-  async #shareInvite(button) {
+  async #shareInvite(button: HTMLButtonElement) {
     if (!this.inviteUrl) return;
     const original = button.textContent;
     try {
-      if (globalThis.navigator?.share) {
+      if (typeof globalThis.navigator?.share === "function") {
         await navigator.share({ title: this.inviteTitle, url: this.inviteUrl });
         button.textContent = "Shared";
       } else {
@@ -275,7 +307,7 @@ export class LobbyExperience {
         button.textContent = "Copied";
       }
     } catch (error) {
-      if (error?.name === "AbortError") return;
+      if (error instanceof Error && error.name === "AbortError") return;
       button.textContent = "Copy failed";
     }
     setTimeout(() => {
@@ -292,11 +324,11 @@ export class LobbyExperience {
     }
   }
 
-  #sendChatMessage(message) {
-    if (this.multiparty) {
+  #sendChatMessage(message: ChatMessage) {
+    if (isMultipartySession(this.session)) {
       const isHost = this.session.participantId === this.session.hostParticipantId;
       if (this.session.topology === "host" && !isHost) {
-        if (this.session.readyPeerIds().includes(this.session.hostParticipantId)) {
+        if (this.session.hostParticipantId && this.session.readyPeerIds().includes(this.session.hostParticipantId)) {
           this.session.sendReliable(this.session.hostParticipantId, message);
         }
         return;
@@ -307,7 +339,8 @@ export class LobbyExperience {
     this.session.sendReliable(message);
   }
 
-  #broadcastReliable(message, { exclude = [] } = {}) {
+  #broadcastReliable(message: unknown, { exclude = [] }: {exclude?: string[]} = {}) {
+    if (!isMultipartySession(this.session)) return;
     const excluded = new Set(exclude);
     for (const peerId of this.session.readyPeerIds()) {
       if (excluded.has(peerId)) continue;
@@ -319,15 +352,15 @@ export class LobbyExperience {
     }
   }
 
-  #handleReliable(detail) {
-    const peerId = this.multiparty ? detail?.peerId : this.#singlePeerId();
-    const message = this.multiparty ? detail?.data : detail;
-    if (message?.kind !== CHAT_KIND) return;
+  #handleReliable(detail: unknown) {
+    const peerId = isMultipartySession(this.session) ? (isRecord(detail) && typeof detail.peerId === "string" ? detail.peerId : null) : this.#singlePeerId();
+    const message = isMultipartySession(this.session) ? (isRecord(detail) ? detail.data : null) : detail;
+    if (!peerId || !isRecord(message) || message.kind !== CHAT_KIND) return;
     const text = normalizeChatText(message.text);
     if (!text || typeof message.id !== "string" || !message.id || typeof message.senderId !== "string") return;
     if (this.seenChatIds.has(message.id)) return;
 
-    if (this.multiparty) {
+    if (isMultipartySession(this.session)) {
       const localIsHost = this.session.participantId === this.session.hostParticipantId;
       if (this.session.topology === "mesh") {
         if (message.senderId !== peerId) return;
@@ -339,7 +372,7 @@ export class LobbyExperience {
       }
 
       this.#rememberChat(message.id);
-      this.#appendChat({ ...message, text }, false);
+      this.#appendChat({ kind: CHAT_KIND, id: message.id, senderId: message.senderId, text }, false);
       if (this.session.topology === "host" && localIsHost) {
         this.#broadcastReliable({ ...message, text }, { exclude: [peerId] });
       }
@@ -349,17 +382,17 @@ export class LobbyExperience {
     const expectedSender = this.session.role === "host" ? "guest" : "host";
     if (message.senderId !== expectedSender) return;
     this.#rememberChat(message.id);
-    this.#appendChat({ ...message, text }, false);
+    this.#appendChat({ kind: CHAT_KIND, id: message.id, senderId: message.senderId, text }, false);
   }
 
-  #rememberChat(id) {
+  #rememberChat(id: string) {
     this.seenChatIds.add(id);
     if (this.seenChatIds.size <= 512) return;
     const oldest = this.seenChatIds.values().next().value;
-    this.seenChatIds.delete(oldest);
+    if (oldest) this.seenChatIds.delete(oldest);
   }
 
-  #appendChat(message, local) {
+  #appendChat(message: ChatMessage, local: boolean) {
     if (!this.chatLog) return;
     const item = this.root.createElement("li");
     item.className = "chat-message";
@@ -374,9 +407,9 @@ export class LobbyExperience {
     this.chatLog.scrollTop = this.chatLog.scrollHeight;
   }
 
-  #displayName(senderId) {
+  #displayName(senderId: string) {
     if (senderId === this.#hostId()) return "Host";
-    if (!this.multiparty && senderId === "guest") return "Guest";
+    if (!isMultipartySession(this.session) && senderId === "guest") return "Guest";
     return `Player ${shortId(senderId)}`;
   }
 
@@ -398,7 +431,7 @@ export class LobbyExperience {
       this.pendingPings.set(id, { peerId, startedAt });
       const message = { kind: PING_KIND, id, senderId: this.#localId() };
       try {
-        if (this.multiparty) this.session.sendRealtime(peerId, message);
+        if (isMultipartySession(this.session)) this.session.sendRealtime(peerId, message);
         else this.session.sendRealtime(message);
       } catch {
         this.pendingPings.delete(id);
@@ -407,21 +440,21 @@ export class LobbyExperience {
     if (readyPeers.length === 0) this.#renderLatency();
   }
 
-  #handleRealtime(detail) {
-    const peerId = this.multiparty ? detail?.peerId : this.#singlePeerId();
-    const message = this.multiparty ? detail?.data : detail;
-    if (!peerId || !message || typeof message !== "object") return;
+  #handleRealtime(detail: unknown) {
+    const peerId = isMultipartySession(this.session) ? (isRecord(detail) && typeof detail.peerId === "string" ? detail.peerId : null) : this.#singlePeerId();
+    const message = isMultipartySession(this.session) ? (isRecord(detail) ? detail.data : null) : detail;
+    if (!peerId || !isRecord(message)) return;
 
     if (message.kind === PING_KIND) {
       if (typeof message.id !== "string" || !message.id) return;
-      if (this.multiparty && message.senderId !== peerId) return;
-      if (!this.multiparty) {
+      if (isMultipartySession(this.session) && message.senderId !== peerId) return;
+      if (!isMultipartySession(this.session)) {
         const expectedSender = this.session.role === "host" ? "guest" : "host";
         if (message.senderId !== expectedSender) return;
       }
       const pong = { kind: PONG_KIND, id: message.id, senderId: this.#localId() };
       try {
-        if (this.multiparty) this.session.sendRealtime(peerId, pong);
+        if (isMultipartySession(this.session)) this.session.sendRealtime(peerId, pong);
         else this.session.sendRealtime(pong);
       } catch {
         // A channel can close between receive and reply; the next probe will recover the display.
@@ -432,8 +465,8 @@ export class LobbyExperience {
     if (message.kind !== PONG_KIND || typeof message.id !== "string") return;
     const pending = this.pendingPings.get(message.id);
     if (!pending || pending.peerId !== peerId) return;
-    if (this.multiparty && message.senderId !== peerId) return;
-    if (!this.multiparty) {
+    if (isMultipartySession(this.session) && message.senderId !== peerId) return;
+    if (!isMultipartySession(this.session)) {
       const expectedSender = this.session.role === "host" ? "guest" : "host";
       if (message.senderId !== expectedSender) return;
     }

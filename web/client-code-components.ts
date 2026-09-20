@@ -99,7 +99,7 @@ const peers = discovery.seedersForPath("assets/world.pack");`,
   },
 ];
 
-function element(name, className, text = null) {
+function element<K extends keyof HTMLElementTagNameMap>(name: K, className: string | null = null, text: string | null = null) {
   const node = document.createElement(name);
   if (className) node.className = className;
   if (text !== null) node.textContent = text;
@@ -107,12 +107,13 @@ function element(name, className, text = null) {
 }
 
 class ClientCodeExample extends HTMLElement {
-  set example(value) {
+  private _example: (typeof examples)[number] | undefined;
+  set example(value: (typeof examples)[number]) {
     this._example = value;
     this.render();
   }
 
-  get example() {
+  get example(): (typeof examples)[number] | undefined {
     return this._example;
   }
 
@@ -183,15 +184,15 @@ class ClientCodeGallery extends HTMLElement {
     tabList.setAttribute("aria-label", "Client code examples");
 
     const stage = element("div", "client-code-stage");
-    const buttons = [];
-    const panels = [];
+    const buttons: HTMLButtonElement[] = [];
+    const panels: HTMLElement[] = [];
 
-    const select = (selectedIndex) => {
+    const select = (selectedIndex: number) => {
       buttons.forEach((button, index) => {
         const active = index === selectedIndex;
         button.setAttribute("aria-selected", String(active));
         button.tabIndex = active ? 0 : -1;
-        panels[index].hidden = !active;
+        panels[index]!.hidden = !active;
       });
     };
 
@@ -208,7 +209,7 @@ class ClientCodeGallery extends HTMLElement {
         const direction = event.key === "ArrowRight" ? 1 : -1;
         const nextIndex = (index + direction + examples.length) % examples.length;
         select(nextIndex);
-        buttons[nextIndex].focus();
+        buttons[nextIndex]!.focus();
       });
       buttons.push(button);
       tabList.append(button);
@@ -218,7 +219,7 @@ class ClientCodeGallery extends HTMLElement {
       panel.setAttribute("role", "tabpanel");
       panel.setAttribute("aria-labelledby", button.id);
 
-      const card = document.createElement("client-code-example");
+      const card = new ClientCodeExample();
       card.example = example;
       panel.append(card);
       panels.push(panel);

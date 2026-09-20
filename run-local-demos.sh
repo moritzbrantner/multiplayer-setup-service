@@ -17,7 +17,9 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-BIND_ADDR="$signaling_bind_addr" cargo run --locked &
+bun run build:web
+
+BIND_ADDR="$signaling_bind_addr" cargo run --locked --bin multiplayer-setup-service &
 service_pid=$!
 
 SIGNALING_HEALTH_URL="$signaling_health_url" python3 - <<'PY'
@@ -42,4 +44,4 @@ printf 'Local multiplayer demos: http://%s:%s/\n' "$demo_bind_addr" "$demo_port"
 if [[ "$demo_bind_addr" != "127.0.0.1" && "$demo_bind_addr" != "localhost" ]]; then
   printf '%s\n' 'For other devices, open the demo host address and append ?api=http://<host>:8787.'
 fi
-python3 -m http.server "$demo_port" --bind "$demo_bind_addr" --directory web
+python3 -m http.server "$demo_port" --bind "$demo_bind_addr" --directory dist/web
