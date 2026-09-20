@@ -12,24 +12,11 @@ const sourceNames = (await readdir(sourceDir))
   .filter((name) => name.endsWith(".ts"))
   .sort();
 
-const build = await Bun.build({
-  entrypoints: sourceNames.map((name) => join(sourceDir, name)),
-  outdir: outputDir,
-  target: "browser",
-  format: "esm",
-  bundle: false,
-  minify: false,
-  sourcemap: "none",
-});
-
-if (!build.success) {
-  for (const log of build.logs) console.error(log);
-  process.exit(1);
-}
+const transpiler = new Bun.Transpiler({ loader: "ts", target: "browser" });
 
 for (const name of sourceNames) {
   const outputPath = join(outputDir, name.replace(/\.ts$/, ".js"));
-  const emitted = await readFile(outputPath, "utf8");
+  const emitted = transpiler.transformSync(await readFile(join(sourceDir, name), "utf8"));
   await writeFile(
     outputPath,
     emitted.replaceAll(".ts\"", ".js\"").replaceAll(".ts'", ".js'"),

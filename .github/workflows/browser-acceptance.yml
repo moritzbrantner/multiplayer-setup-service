@@ -34,9 +34,9 @@ jobs:
       - name: Install locked browser harness and Chromium
         run: |
           bun install --frozen-lockfile --ignore-scripts
-          bunx playwright install --with-deps chromium
+          e2e/node_modules/.bin/playwright install --with-deps chromium
       - name: Build browser TypeScript
-        run: bun --cwd web run build
+        run: bun run --cwd web build
       - name: Install loopback-only TURN fixture
         run: |
           sudo apt-get update

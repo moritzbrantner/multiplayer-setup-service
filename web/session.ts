@@ -1,13 +1,17 @@
+import { TypedEventTarget, isRecord } from "./events.ts";
+type RoomResponse = {roomId: string; displayCode: string; websocketPath: string; hostToken?: string; guestToken?: string};
+export type PeerEvents = {room: {roomId: string; displayCode: string; role: "host" | "guest"}; statechange: {state: string}; "p2p-ready": Record<string, never>; "signaling-closed": Record<string, never>; "peer-connected": {peerRole: string}; "peer-disconnected": {peerRole: string}; reliable: unknown; realtime: unknown; "channel-open": {kind: string}; "channel-close": {kind: string}; error: {error: unknown}};
 const SIGNALING_PROTOCOL = "multiplayer-setup-v1";
 
-function toWebSocketUrl(apiBase, websocketPath, role) {
+function toWebSocketUrl(apiBase: string, websocketPath: string, role: string | null) {
   const url = new URL(websocketPath, apiBase);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  if (!role) throw new Error("Room role is missing");
   url.searchParams.set("role", role);
   return url;
 }
 
-async function readJson(response) {
+async function readJson(response: Response): Promise<RoomResponse> {
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     const message = body?.error?.message ?? `Request failed with ${response.status}`;
@@ -16,19 +20,35 @@ async function readJson(response) {
   return body;
 }
 
-function parseChannelMessage(event) {
+function parseChannelMessage(event: MessageEvent): Record<string, unknown> | null {
   if (typeof event.data !== "string") {
     return null;
   }
   try {
-    return JSON.parse(event.data);
+    const value: unknown = JSON.parse(event.data);
+    return isRecord(value) ? value : null;
   } catch {
     return null;
   }
 }
 
-export class PeerSession extends EventTarget {
-  constructor({ apiBase = window.location.origin, iceServers = [] } = {}) {
+export class PeerSession extends TypedEventTarget<PeerEvents> {
+  apiBase: string;
+  iceServers: RTCIceServer[];
+  role: "host" | "guest" | null;
+  roomId: string | null;
+  displayCode: string | null;
+  peer: RTCPeerConnection | null;
+  signaling: WebSocket | null;
+  reliable: RTCDataChannel | null;
+  realtime: RTCDataChannel | null;
+  closed: boolean;
+  pendingCandidates: RTCIceCandidateInit[];
+  realtimeSequence: number;
+  lastRealtimeSequence: number;
+  offerStarted: boolean;
+
+  constructor({ apiBase = window.location.origin, iceServers = [] }: {apiBase?: string; iceServers?: RTCIceServer[]} = {}) {
     super();
     this.apiBase = apiBase;
     this.iceServers = iceServers;
@@ -59,7 +79,7 @@ export class PeerSession extends EventTarget {
     return room;
   }
 
-  async join(roomCode) {
+  async join(roomCode: string) {
     const normalized = String(roomCode ?? "").trim();
     if (!normalized) {
       throw new Error("Enter a room code");
@@ -77,11 +97,11 @@ export class PeerSession extends EventTarget {
     return room;
   }
 
-  sendReliable(data) {
+  sendReliable(data: unknown) {
     this.#sendChannel(this.reliable, { v: 1, data });
   }
 
-  sendRealtime(data) {
+  sendRealtime(data: unknown) {
     this.realtimeSequence += 1;
     this.#sendChannel(this.realtime, {
       v: 1,
@@ -107,7 +127,7 @@ export class PeerSession extends EventTarget {
       }
     });
     this.peer.addEventListener("connectionstatechange", () => {
-      this.#emitState(this.peer.connectionState);
+      this.#emitState(this.peer?.connectionState ?? "closed");
       this.#maybeReleaseSignaling();
     });
     this.peer.addEventListener("icegatheringstatechange", () => this.#maybeReleaseSignaling());
@@ -133,7 +153,8 @@ export class PeerSession extends EventTarget {
     }
   }
 
-  async #connectSignaling(websocketPath, token) {
+  async #connectSignaling(websocketPath: string, token: string | undefined) {
+    if (!token) throw new Error("Room capability is missing");
     const socket = new WebSocket(
       toWebSocketUrl(this.apiBase, websocketPath, this.role),
       [SIGNALING_PROTOCOL, `cap.${token}`],
@@ -152,7 +173,7 @@ export class PeerSession extends EventTarget {
       this.#fail(new Error("Signaling WebSocket failed"));
     });
 
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const onOpen = () => {
         cleanup();
         resolve();
@@ -170,7 +191,7 @@ export class PeerSession extends EventTarget {
     });
   }
 
-  async #handleSignalingMessage(event) {
+  async #handleSignalingMessage(event: MessageEvent) {
     if (typeof event.data !== "string") {
       return;
     }
@@ -201,14 +222,18 @@ export class PeerSession extends EventTarget {
   }
 
   async #startOffer() {
+    if (!this.peer) throw new Error("Room peer is missing");
     const offer = await this.peer.createOffer();
     await this.peer.setLocalDescription(offer);
     this.#signal({ description: this.peer.localDescription });
   }
 
-  async #handleSignal(payload) {
-    if (payload?.description) {
-      await this.peer.setRemoteDescription(payload.description);
+  async #handleSignal(payload: Record<string, unknown>) {
+    if (!this.peer) throw new Error("Room peer is missing");
+    if (isRecord(payload.description)) {
+      const description = payload.description;
+      if ((description.type !== "offer" && description.type !== "answer") || typeof description.sdp !== "string") return;
+      await this.peer.setRemoteDescription({type: description.type, sdp: description.sdp});
       await this.#flushCandidates();
       if (payload.description.type === "offer") {
         const answer = await this.peer.createAnswer();
@@ -227,19 +252,20 @@ export class PeerSession extends EventTarget {
   }
 
   async #flushCandidates() {
+    if (!this.peer) throw new Error("Room peer is missing");
     const pending = this.pendingCandidates.splice(0);
     for (const candidate of pending) {
       await this.peer.addIceCandidate(candidate);
     }
   }
 
-  #signal(payload) {
+  #signal(payload: unknown) {
     if (this.signaling?.readyState === WebSocket.OPEN) {
       this.signaling.send(JSON.stringify({ type: "signal", payload }));
     }
   }
 
-  #bindChannel(kind, channel) {
+  #bindChannel(kind: "reliable" | "realtime", channel: RTCDataChannel) {
     if (kind === "reliable") {
       this.reliable = channel;
     } else {
@@ -257,7 +283,7 @@ export class PeerSession extends EventTarget {
         return;
       }
       if (kind === "realtime") {
-        if (!Number.isInteger(envelope.seq) || envelope.seq <= this.lastRealtimeSequence) {
+        if (typeof envelope.seq !== "number" || !Number.isInteger(envelope.seq) || envelope.seq <= this.lastRealtimeSequence) {
           return;
         }
         this.lastRealtimeSequence = envelope.seq;
@@ -279,22 +305,22 @@ export class PeerSession extends EventTarget {
     }
   }
 
-  #sendChannel(channel, value) {
+  #sendChannel(channel: RTCDataChannel | null, value: unknown) {
     if (channel?.readyState !== "open") {
       throw new Error("Peer-to-peer channel is not ready");
     }
     channel.send(JSON.stringify(value));
   }
 
-  #emit(type, detail) {
+  #emit<K extends keyof PeerEvents>(type: K, detail: PeerEvents[K]) {
     this.dispatchEvent(new CustomEvent(type, { detail }));
   }
 
-  #emitState(state) {
+  #emitState(state: string) {
     this.#emit("statechange", { state });
   }
 
-  #fail(error) {
+  #fail(error: unknown) {
     this.#emit("error", { error });
   }
 }

@@ -109,3 +109,18 @@ test("unsigned asset-only v1 manifests remain available during migration", async
     /Unsigned trusted content manifests are disabled/,
   );
 });
+
+test("public manifest fetch verifies signatures and applies revocation policy", async () => {
+  const { fetchTrustedManifest } = await import("../web/content-verification.ts");
+  const source = manifest();
+  const { envelope, trustedKeys } = await signedEnvelope(source);
+  const fetchImpl = async () => new Response(JSON.stringify(envelope), { status: 200 });
+  const options = { fetchImpl, trustedKeys };
+  assert.deepEqual((await fetchTrustedManifest("https://release.example/manifest.json", options)).manifest, source);
+  await assert.rejects(
+    fetchTrustedManifest("https://release.example/manifest.json", { ...options, revokedKeyIds: ["release-2026"] }),
+    /signing key is revoked/,
+  );
+  envelope.manifest.game.version = "tampered";
+  await assert.rejects(fetchTrustedManifest("https://release.example/manifest.json", options), /signature is invalid/);
+});

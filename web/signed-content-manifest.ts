@@ -1,14 +1,18 @@
-import { validateTrustedManifest } from "./content-verification.ts";
+import type { ContentManifest } from "./content-manifest.ts";
+export type TrustedKeys = Map<string, Uint8Array | ArrayBuffer | string> | Record<string, Uint8Array | ArrayBuffer | string>;
+export type ManifestTrustOptions = {trustedKeys?: TrustedKeys | null; revokedKeyIds?: string[] | Set<string> | null; allowUnsignedAssets?: boolean};
+type SignedManifest = {protocol: string; manifest: ContentManifest; signature: {algorithm: string; keyId: string; value: string}};
+import { validateTrustedManifest } from "./content-manifest.ts";
 
 export const SIGNED_MANIFEST_PROTOCOL = "multiplayer-content-manifest-signature-v1";
 const SIGNATURE_ALGORITHM = "Ed25519";
 const KEY_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
-function isObject(value) {
+function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function canonicalize(value) {
+function canonicalize(value: unknown): string {
   if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
     return JSON.stringify(value);
   }
@@ -20,7 +24,7 @@ function canonicalize(value) {
     .join(",")}}`;
 }
 
-function base64UrlBytes(value, field) {
+function base64UrlBytes(value: unknown, field: string) {
   if (typeof value !== "string" || value === "") throw new Error(`${field} must be base64url text`);
   if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error(`${field} must be unpadded base64url text`);
   const padding = "=".repeat((4 - (value.length % 4)) % 4);
@@ -31,7 +35,7 @@ function base64UrlBytes(value, field) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-function normalizeKeyIdSet(value, field) {
+function normalizeKeyIdSet(value: string[] | Set<string> | null | undefined, field: string) {
   if (value == null) return new Set();
   const values = value instanceof Set ? [...value] : Array.isArray(value) ? value : null;
   if (!values) throw new Error(`${field} must be an array or Set of key IDs`);
@@ -45,16 +49,16 @@ function normalizeKeyIdSet(value, field) {
   return result;
 }
 
-function trustedKeyBytes(trustedKeys, keyId) {
+function trustedKeyBytes(trustedKeys: TrustedKeys, keyId: string) {
   const value = trustedKeys instanceof Map ? trustedKeys.get(keyId) : trustedKeys?.[keyId];
   if (value == null) throw new Error(`Unknown trusted manifest signing key: ${keyId}`);
-  if (value instanceof Uint8Array) return value;
+  if (value instanceof Uint8Array) return new Uint8Array(value);
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (typeof value === "string") return base64UrlBytes(value, `trustedKeys.${keyId}`);
   throw new Error(`Trusted manifest key ${keyId} must be raw Ed25519 bytes or base64url text`);
 }
 
-function validateEnvelope(envelope) {
+function validateEnvelope(envelope: unknown): SignedManifest {
   if (!isObject(envelope)) throw new Error("Signed manifest envelope must be an object");
   if (envelope.protocol !== SIGNED_MANIFEST_PROTOCOL) {
     throw new Error(`Unsupported signed manifest protocol: ${String(envelope.protocol)}`);
@@ -67,30 +71,31 @@ function validateEnvelope(envelope) {
   if (typeof envelope.signature.keyId !== "string" || !KEY_ID_PATTERN.test(envelope.signature.keyId)) {
     throw new Error("Manifest signature keyId is invalid");
   }
-  return envelope;
+  // Envelope fields have been validated; signature bytes are checked before verification.
+  return envelope as SignedManifest;
 }
 
-export function canonicalManifestBytes(manifest) {
+export function canonicalManifestBytes(manifest: ContentManifest) {
   validateTrustedManifest(manifest);
   return new TextEncoder().encode(canonicalize(manifest));
 }
 
 export async function verifySignedManifest(
-  envelope,
-  { trustedKeys, revokedKeyIds = null } = {},
+  envelope: unknown,
+  { trustedKeys, revokedKeyIds = null }: ManifestTrustOptions = {},
 ) {
-  validateEnvelope(envelope);
+  const validated = validateEnvelope(envelope);
   if (!trustedKeys) throw new Error("trustedKeys is required for signed manifest verification");
 
   const revoked = normalizeKeyIdSet(revokedKeyIds, "revokedKeyIds");
-  const keyId = envelope.signature.keyId;
+  const keyId = validated.signature.keyId;
   if (revoked.has(keyId)) {
     throw new Error(`Trusted manifest signing key is revoked: ${keyId}`);
   }
 
   const publicKeyBytes = trustedKeyBytes(trustedKeys, keyId);
   if (publicKeyBytes.byteLength !== 32) throw new Error("Ed25519 public keys must be exactly 32 bytes");
-  const signatureBytes = base64UrlBytes(envelope.signature.value, "manifest signature");
+  const signatureBytes = base64UrlBytes(validated.signature.value, "manifest signature");
   if (signatureBytes.byteLength !== 64) throw new Error("Ed25519 signatures must be exactly 64 bytes");
 
   const key = await globalThis.crypto.subtle.importKey(
@@ -104,20 +109,20 @@ export async function verifySignedManifest(
     { name: SIGNATURE_ALGORITHM },
     key,
     signatureBytes,
-    canonicalManifestBytes(envelope.manifest),
+    canonicalManifestBytes(validated.manifest),
   );
   if (!verified) throw new Error("Trusted content manifest signature is invalid");
 
   return {
-    manifest: envelope.manifest,
+    manifest: validated.manifest,
     keyId,
     algorithm: SIGNATURE_ALGORITHM,
   };
 }
 
 export async function resolveTrustedManifest(
-  value,
-  { trustedKeys = null, revokedKeyIds = null, allowUnsignedAssets = true } = {},
+  value: unknown,
+  { trustedKeys = null, revokedKeyIds = null, allowUnsignedAssets = true }: ManifestTrustOptions = {},
 ) {
   if (isObject(value) && value.protocol === SIGNED_MANIFEST_PROTOCOL) {
     return (await verifySignedManifest(value, { trustedKeys, revokedKeyIds })).manifest;

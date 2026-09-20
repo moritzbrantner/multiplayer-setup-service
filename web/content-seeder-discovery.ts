@@ -1,15 +1,25 @@
+import type { ContentManifest } from "./content-manifest.ts";
+import type { ResilientLobbySession } from "./resilient-lobby-session.ts";
 import { manifestFile, validateTrustedManifest } from "./content-verification.ts";
 
-function transferableFiles(manifest) {
+function transferableFiles(manifest: ContentManifest) {
   return manifest.files.filter((file) => file.chunks && file.chunks.sha256.length > 0);
 }
 
-function sortedUnique(values) {
+function sortedUnique(values: string[]) {
   return [...new Set(values)].sort();
 }
 
 export class ContentSeederDiscovery extends EventTarget {
-  constructor({ session, manifest } = {}) {
+  session: ResilientLobbySession;
+  manifest: ContentManifest;
+  trustedContentIds: Set<string>;
+  peerContent: Map<string, Set<string>>;
+  localContentIds: string[];
+  closed: boolean;
+  onSeed: (event: CustomEvent<{peerId: string; contentIds: string[]}>) => void;
+  onDisconnect: (event: CustomEvent<{participantId: string}>) => void;
+  constructor({ session, manifest }: {session: ResilientLobbySession; manifest: ContentManifest}) {
     super();
     if (!session || session.contentSharing !== true) {
       throw new Error("ContentSeederDiscovery requires a LobbySession with contentSharing enabled");
@@ -29,7 +39,7 @@ export class ContentSeederDiscovery extends EventTarget {
     session.addEventListener("participant-disconnected", this.onDisconnect);
   }
 
-  setSeederEnabled(enabled, { paths = null } = {}) {
+  setSeederEnabled(enabled: boolean, { paths = null }: {paths?: string[] | null} = {}) {
     if (this.closed) throw new Error("ContentSeederDiscovery is closed");
     if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
 
@@ -44,7 +54,7 @@ export class ContentSeederDiscovery extends EventTarget {
     return [...this.localContentIds];
   }
 
-  seedersForContentId(contentId) {
+  seedersForContentId(contentId: string) {
     if (!this.trustedContentIds.has(contentId)) return [];
     return [...this.peerContent.entries()]
       .filter(([, contentIds]) => contentIds.has(contentId))
@@ -52,7 +62,7 @@ export class ContentSeederDiscovery extends EventTarget {
       .sort();
   }
 
-  seedersForPath(path) {
+  seedersForPath(path: string) {
     const file = manifestFile(this.manifest, path);
     if (!file.chunks || file.chunks.sha256.length === 0) return [];
     return this.seedersForContentId(file.sha256);
@@ -76,7 +86,7 @@ export class ContentSeederDiscovery extends EventTarget {
     this.localContentIds = [];
   }
 
-  #contentIdsForPaths(paths) {
+  #contentIdsForPaths(paths: string[] | null) {
     if (paths == null) {
       return sortedUnique(transferableFiles(this.manifest).map((file) => file.sha256));
     }
@@ -93,7 +103,7 @@ export class ContentSeederDiscovery extends EventTarget {
     return sortedUnique(contentIds);
   }
 
-  #handleSeed(detail) {
+  #handleSeed(detail: {peerId: string; contentIds: string[]}) {
     if (this.closed || typeof detail?.peerId !== "string" || !Array.isArray(detail.contentIds)) return;
 
     const trusted = detail.contentIds.filter((contentId) => this.trustedContentIds.has(contentId));
@@ -102,7 +112,7 @@ export class ContentSeederDiscovery extends EventTarget {
     this.#emitChange();
   }
 
-  #handleDisconnect(peerId) {
+  #handleDisconnect(peerId: string) {
     if (this.closed || typeof peerId !== "string") return;
     if (this.peerContent.delete(peerId)) this.#emitChange();
   }

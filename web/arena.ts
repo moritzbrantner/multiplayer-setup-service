@@ -1,5 +1,8 @@
+import type { Position } from "./arena-model.ts";
+import { isRecord, errorMessage } from "./events.ts";
+import { requiredElement } from "./dom.ts";
 import { LobbyExperience, readInviteJoin } from "./lobby-experience.ts";
-import { LobbySession } from "./lobby-session.ts";
+import { DemoLobbySession as LobbySession } from "./demo-session.ts";
 import {
   applySnapshotEntry,
   applyStepToState,
@@ -13,42 +16,42 @@ import {
 const params = new URLSearchParams(window.location.search);
 const apiBase = params.get("api") || "http://127.0.0.1:8787";
 const inviteJoin = readInviteJoin({ search: window.location.search, codeParam: "lobby" });
-const topologySelect = document.querySelector("#topology");
-const maxParticipantsSelect = document.querySelector("#max-participants");
-const hostButton = document.querySelector("#host");
-const joinButton = document.querySelector("#join");
-const codeInput = document.querySelector("#code");
-const status = document.querySelector("#status");
-const game = document.querySelector("#game");
-const arena = document.querySelector("#arena");
-const selfId = document.querySelector("#self-id");
-const participantCount = document.querySelector("#participant-count");
-const peerCount = document.querySelector("#peer-count");
-const edgeCount = document.querySelector("#edge-count");
+const topologySelect = requiredElement("#topology", HTMLSelectElement);
+const maxParticipantsSelect = requiredElement("#max-participants", HTMLSelectElement);
+const hostButton = requiredElement("#host", HTMLButtonElement);
+const joinButton = requiredElement("#join", HTMLButtonElement);
+const codeInput = requiredElement("#code", HTMLInputElement);
+const status = requiredElement("#status", HTMLElement);
+const game = requiredElement("#game", HTMLElement);
+const arena = requiredElement("#arena", HTMLElement);
+const selfId = requiredElement("#self-id", HTMLElement);
+const participantCount = requiredElement("#participant-count", HTMLElement);
+const peerCount = requiredElement("#peer-count", HTMLElement);
+const edgeCount = requiredElement("#edge-count", HTMLElement);
 
 const queryTopology = params.get("topology");
 if (inviteJoin.code) codeInput.value = inviteJoin.code;
 if (queryTopology === "mesh" || queryTopology === "host") topologySelect.value = queryTopology;
 
-let session = null;
-let lobbyExperience = null;
+let session: LobbySession | null = null;
+let lobbyExperience: LobbyExperience | null = null;
 let localSequence = 0;
-const players = new Map();
-const lastSequence = new Map();
-const heldKeys = new Set();
+const players = new Map<string, Position>();
+const lastSequence = new Map<string, number>();
+const heldKeys = new Set<string>();
 
-function ensurePlayer(id) {
+function ensurePlayer(id: string) {
   if (!players.has(id)) {
     players.set(id, initialPlayer(id));
     lastSequence.set(id, 0);
   }
-  return players.get(id);
+  return players.get(id)!;
 }
 
 function render() {
   const participantIds = [...session?.participants ?? []].sort();
   const existing = new Map(
-    [...arena.querySelectorAll(".arena-player")].map((node) => [node.dataset.id, node]),
+    [...arena.querySelectorAll<HTMLElement>(".arena-player")].map((node) => [node.dataset.id, node]),
   );
 
   for (const id of participantIds) {
@@ -58,7 +61,7 @@ function render() {
       node = document.createElement("div");
       node.className = "arena-player";
       node.dataset.id = id;
-      node.dataset.self = String(id === session.participantId);
+      node.dataset.self = String(id === session?.participantId);
       node.style.background = `hsl(${hashId(id) % 360} 72% 52%)`;
       const label = document.createElement("span");
       label.textContent = id;
@@ -78,7 +81,7 @@ function render() {
   edgeCount.textContent = String(topologyEdgeCount(topologySelect.value, count));
 }
 
-function applyStep(message) {
+function applyStep(message: unknown) {
   if (!session) return false;
   const applied = applyStepToState({
     players,
@@ -90,7 +93,7 @@ function applyStep(message) {
 }
 
 function topologyReady() {
-  if (!session) return false;
+  if (!session?.participantId || !session.hostParticipantId) return false;
   return isTopologyReady({
     topology: session.topology,
     participantId: session.participantId,
@@ -100,8 +103,8 @@ function topologyReady() {
   });
 }
 
-function sendLocalStep(dx, dy) {
-  if (!session || game.classList.contains("hidden")) return;
+function sendLocalStep(dx: number, dy: number) {
+  if (!session?.participantId || !session.hostParticipantId || game.classList.contains("hidden")) return;
   if (!topologyReady()) {
     status.textContent = "Waiting for the required peer links before sending input…";
     return;
@@ -124,7 +127,8 @@ function sendLocalStep(dx, dy) {
   }
 }
 
-function receiveReliable(peerId, message) {
+function receiveReliable(peerId: string, message: unknown) {
+  if (!session || !isRecord(message)) return;
   if (message?.type === "snapshot") {
     if (peerId !== session.hostParticipantId || !Array.isArray(message.players)) return;
     let changed = false;
@@ -160,7 +164,8 @@ function receiveReliable(peerId, message) {
   }
 }
 
-function sendSnapshot(peerId) {
+function sendSnapshot(peerId: string) {
+  if (!session) return;
   if (session.participantId !== session.hostParticipantId) return;
   const snapshot = {
     type: "snapshot",
@@ -184,6 +189,7 @@ function directionFromHeldKeys() {
 }
 
 function setConnectedUi() {
+  if (!session) return;
   game.classList.remove("hidden");
   selfId.textContent = session.participantId;
   topologySelect.disabled = true;
@@ -194,10 +200,10 @@ function setConnectedUi() {
   render();
 }
 
-function wireSession(current) {
+function wireSession(current: LobbySession) {
   current.addEventListener("lobby", () => {
     status.textContent = `Lobby ${current.displayCode}; connecting peers…`;
-    codeInput.value = current.displayCode;
+    codeInput.value = current.displayCode ?? "";
     setConnectedUi();
   });
   current.addEventListener("roster", (event) => {
@@ -215,7 +221,7 @@ function wireSession(current) {
     receiveReliable(event.detail.peerId, event.detail.data);
   });
   current.addEventListener("error", (event) => {
-    status.textContent = event.detail.error.message;
+    status.textContent = errorMessage(event.detail.error);
   });
 }
 
@@ -223,13 +229,13 @@ function createSession() {
   lobbyExperience?.close();
   lobbyExperience = null;
   session?.close();
-  session = new LobbySession({ apiBase, topology: topologySelect.value });
+  session = new LobbySession({ apiBase, topology: topologySelect.value === "host" ? "host" : "mesh" });
   lobbyExperience = new LobbyExperience({
     session,
     root: document,
     codeParam: "lobby",
     inviteTitle: "Join my multiplayer arena",
-    inviteExtras: (current) => ({ topology: current.topology }),
+    inviteExtras: () => ({ topology: topologySelect.value }),
   });
   wireSession(session);
   return session;
@@ -241,7 +247,7 @@ hostButton.addEventListener("click", async () => {
     const current = createSession();
     await current.host(Number(maxParticipantsSelect.value));
   } catch (error) {
-    status.textContent = error.message;
+    status.textContent = errorMessage(error);
   }
 });
 
@@ -251,7 +257,7 @@ joinButton.addEventListener("click", async () => {
     const current = createSession();
     await current.join(codeInput.value);
   } catch (error) {
-    status.textContent = error.message;
+    status.textContent = errorMessage(error);
   }
 });
 
@@ -260,8 +266,8 @@ for (const [selector, dx, dy] of [
   ["#left", -1, 0],
   ["#down", 0, 1],
   ["#right", 1, 0],
-]) {
-  document.querySelector(selector).addEventListener("click", () => sendLocalStep(dx, dy));
+] as const) {
+  requiredElement(selector, HTMLButtonElement).addEventListener("click", () => sendLocalStep(dx, dy));
 }
 
 window.addEventListener("keydown", (event) => {
@@ -275,7 +281,7 @@ window.addEventListener("keyup", (event) => heldKeys.delete(event.key.toLowerCas
 window.addEventListener("blur", () => heldKeys.clear());
 
 setInterval(() => {
-  if (!session || game.classList.contains("hidden")) return;
+  if (!session?.participantId || !session.hostParticipantId || game.classList.contains("hidden")) return;
   const { dx, dy } = directionFromHeldKeys();
   if (dx !== 0 || dy !== 0) sendLocalStep(dx, dy);
 }, 50);

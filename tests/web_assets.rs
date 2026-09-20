@@ -41,9 +41,9 @@ fn games_share_the_peer_session_transport() {
     let tic_tac_toe = web_file("tic-tac-toe.ts");
     let pong = web_file("pong.ts");
 
-    assert!(tic_tac_toe.contains("./session.ts"));
+    assert!(tic_tac_toe.contains("./demo-session.ts"));
     assert!(tic_tac_toe.contains("sendReliable"));
-    assert!(pong.contains("./session.ts"));
+    assert!(pong.contains("./demo-session.ts"));
     assert!(pong.contains("sendRealtime"));
     assert!(pong.contains("sendReliable"));
 }
@@ -78,7 +78,7 @@ fn input_arena_transmits_commands_and_delegates_deterministic_calculation() {
     let arena = web_file("arena.ts");
     let model = web_file("arena-model.ts");
 
-    assert!(arena.contains("./lobby-session.ts"));
+    assert!(arena.contains("./demo-session.ts"));
     assert!(arena.contains("./arena-model.ts"));
     assert!(arena.contains("type: \"step\""));
     assert!(arena.contains("broadcastReliable"));
@@ -153,7 +153,7 @@ fn pages_workflow_is_read_only_until_deploy_and_publishes_only_web_assets() {
     let workflow = repo_file(".github/workflows/pages.yml");
     assert!(workflow.contains("permissions:\n  contents: read"));
     assert!(workflow.contains("path: dist/web"));
-    assert!(workflow.contains("bun --cwd web run build"));
+    assert!(workflow.contains("bun run --cwd web build"));
     assert!(workflow.contains("pages: write"));
     assert!(workflow.contains("id-token: write"));
     assert!(workflow.contains("actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b"));

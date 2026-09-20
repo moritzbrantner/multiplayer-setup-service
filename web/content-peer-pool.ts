@@ -1,3 +1,13 @@
+import { TypedEventTarget } from "./events.ts";
+import type { ContentData } from "./events.ts";
+import type { ResilientLobbySession } from "./resilient-lobby-session.ts";
+import type { SessionEvents } from "./lobby-types.ts";
+import type { ContentUploadBudget } from "./content-upload-budget.ts";
+import type { ContentEvents } from "./content-types.ts";
+type UploadBudget = Pick<ContentUploadBudget, "consume"> & Partial<Pick<ContentUploadBudget, "reserve" | "paused" | "pauseController">>;
+function hasReserve(budget: UploadBudget): budget is UploadBudget & {reserve: ContentUploadBudget["reserve"]} { return typeof budget.reserve === "function"; }
+type ContentLink = {peerId: string; connectionId: string; initiatedLocally: boolean; peer: RTCPeerConnection; channel: RTCDataChannel | null; pendingCandidates: RTCIceCandidateInit[]; readyEmitted: boolean; nextRelaySendAt: number};
+type PoolOptions = {session: ResilientLobbySession; uploadBudget?: UploadBudget | null; maxPeers?: number; relayPolicy?: "deny" | "allow" | "limit"; relayMaxBytesPerSecond?: number; peerConnectionFactory?: (configuration: RTCConfiguration) => RTCPeerConnection; now?: () => number; sleep?: (delayMs: number) => Promise<void>};
 import { sessionUploadBudget } from "./content-upload-budget.ts";
 
 const CONTENT_PEER_PROTOCOL = 1;
@@ -10,11 +20,11 @@ const DEFAULT_RELAY_MAX_BYTES_PER_SECOND = 256 * 1024;
 const CONNECTION_ID_PATTERN = /^[0-9a-f]{16}$/;
 const RELAY_POLICIES = new Set(["deny", "allow", "limit"]);
 
-function isObject(value) {
+function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function signalingOpen(socket) {
+function signalingOpen(socket: WebSocket | null): socket is WebSocket {
   return socket?.readyState === (globalThis.WebSocket?.OPEN ?? 1);
 }
 
@@ -24,13 +34,13 @@ function createConnectionId() {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function validateMaxPeers(maxPeers) {
+function validateMaxPeers(maxPeers: number) {
   if (!Number.isInteger(maxPeers) || maxPeers < 1 || maxPeers > MAX_MAX_PEERS) {
     throw new Error(`maxPeers must be between 1 and ${MAX_MAX_PEERS}`);
   }
 }
 
-function validateWaterMarks(highWaterMark, lowWaterMark) {
+function validateWaterMarks(highWaterMark: number, lowWaterMark: number) {
   if (!Number.isSafeInteger(highWaterMark) || highWaterMark < 1) {
     throw new Error("Content highWaterMark must be a positive safe integer");
   }
@@ -39,7 +49,7 @@ function validateWaterMarks(highWaterMark, lowWaterMark) {
   }
 }
 
-function validateRelayPolicy(relayPolicy, relayMaxBytesPerSecond) {
+function validateRelayPolicy(relayPolicy: string, relayMaxBytesPerSecond: number) {
   if (!RELAY_POLICIES.has(relayPolicy)) {
     throw new Error("relayPolicy must be 'deny', 'allow', or 'limit'");
   }
@@ -48,7 +58,7 @@ function validateRelayPolicy(relayPolicy, relayMaxBytesPerSecond) {
   }
 }
 
-function contentByteLength(value) {
+function contentByteLength(value: ContentData) {
   if (typeof value === "string") return new TextEncoder().encode(value).byteLength;
   if (value instanceof ArrayBuffer) return value.byteLength;
   if (ArrayBuffer.isView(value)) return value.byteLength;
@@ -56,15 +66,15 @@ function contentByteLength(value) {
   throw new Error("Relay-limited content must have a measurable byte length");
 }
 
-function statEntries(report) {
+function statEntries(report: RTCStatsReport) {
   if (!report) return [];
   if (typeof report.values === "function") return [...report.values()];
-  const values = [];
+  const values: RTCStats[] = [];
   if (typeof report.forEach === "function") report.forEach((value) => values.push(value));
   return values;
 }
 
-export async function selectedIcePath(peer) {
+export async function selectedIcePath(peer: Pick<RTCPeerConnection, "getStats"> | null): Promise<"unknown" | "relay" | "direct"> {
   if (!peer || typeof peer.getStats !== "function") return "unknown";
   let report;
   try {
@@ -94,7 +104,7 @@ export async function selectedIcePath(peer) {
   return "direct";
 }
 
-function parseServerSignal(event) {
+function parseServerSignal(event: MessageEvent) {
   if (typeof event.data !== "string") return null;
   let message;
   try {
@@ -103,13 +113,34 @@ function parseServerSignal(event) {
     return null;
   }
   if (message?.type !== "signal" || typeof message.from !== "string") return null;
-  const envelope = message.payload?.contentPeer;
+  const envelope: unknown = message.payload?.contentPeer;
   if (!isObject(envelope) || envelope.v !== CONTENT_PEER_PROTOCOL) return null;
-  if (!CONNECTION_ID_PATTERN.test(envelope.connectionId ?? "")) return null;
-  return { peerId: message.from, envelope };
+  if (typeof envelope.connectionId !== "string" || !CONNECTION_ID_PATTERN.test(envelope.connectionId)) return null;
+  return { peerId: String(message.from), envelope: { ...envelope, connectionId: envelope.connectionId } };
 }
 
-export class ContentPeerPool extends EventTarget {
+export class ContentPeerPool extends TypedEventTarget<ContentEvents> {
+  session: ResilientLobbySession;
+  signaling: WebSocket | null;
+  signalingGeneration: number;
+  uploadBudget: UploadBudget;
+  uploadAdmissionBudget: ContentUploadBudget | (UploadBudget & {reserve: ContentUploadBudget["reserve"]});
+  sendAbort: AbortController;
+  contentSharing: boolean;
+  maxPeers: number;
+  relayPolicy: "deny" | "allow" | "limit";
+  relayMaxBytesPerSecond: number;
+  peerConnectionFactory: (configuration: RTCConfiguration) => RTCPeerConnection;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  peers: Map<string, ContentLink>;
+  closed: boolean;
+  signalChains: Map<string, Promise<void>>;
+  onSignalingMessage: ((event: MessageEvent) => void) | null;
+  onSignalingChanged: () => void;
+  onSessionState: (event: CustomEvent<SessionEvents["statechange"]>) => void;
+  onParticipantDisconnected: (event: CustomEvent<{participantId: string}>) => void;
+
   constructor({
     session,
     uploadBudget = null,
@@ -119,7 +150,7 @@ export class ContentPeerPool extends EventTarget {
     peerConnectionFactory = (configuration) => new RTCPeerConnection(configuration),
     now = () => Date.now(),
     sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
-  } = {}) {
+  }: PoolOptions) {
     super();
     if (!session || session.contentSharing !== true) {
       throw new Error("ContentPeerPool requires a LobbySession with contentSharing enabled");
@@ -147,7 +178,7 @@ export class ContentPeerPool extends EventTarget {
       throw new Error("uploadBudget must provide consume()");
     }
     this.uploadAdmissionBudget =
-      typeof this.uploadBudget.reserve === "function" ? this.uploadBudget : sessionUploadBudget(session);
+      hasReserve(this.uploadBudget) ? this.uploadBudget : sessionUploadBudget(session);
     this.sendAbort = new AbortController();
     this.contentSharing = true;
     this.maxPeers = maxPeers;
@@ -190,13 +221,13 @@ export class ContentPeerPool extends EventTarget {
     return this.peers.size < this.maxPeers;
   }
 
-  async icePath(peerId) {
+  async icePath(peerId: string) {
     const link = this.peers.get(peerId);
     if (!link) throw new Error(`Content peer ${peerId} is not connected`);
     return selectedIcePath(link.peer);
   }
 
-  async connect(peerId) {
+  async connect(peerId: string) {
     if (this.closed) throw new Error("ContentPeerPool is closed");
     this.#bindSignaling();
     if (!signalingOpen(this.signaling)) throw new Error("Lobby signaling socket is not open");
@@ -222,8 +253,8 @@ export class ContentPeerPool extends EventTarget {
   }
 
   async sendContent(
-    peerId,
-    data,
+    peerId: string,
+    data: ContentData,
     {
       highWaterMark = DEFAULT_HIGH_WATER_MARK,
       lowWaterMark = DEFAULT_LOW_WATER_MARK,
@@ -294,13 +325,16 @@ export class ContentPeerPool extends EventTarget {
       if (this.closed || this.uploadBudget.paused || this.peers.get(peerId) !== link || !this.#linkReady(link)) {
         throw new Error(`Content peer ${peerId} is not ready for upload`);
       }
-      link.channel.send(data);
+      if (typeof data === "string") link.channel.send(data);
+      else if (data instanceof Blob) link.channel.send(data);
+      else if (data instanceof ArrayBuffer) link.channel.send(data);
+      else link.channel.send(data);
     } finally {
       reservation.release();
     }
   }
 
-  disconnect(peerId) {
+  disconnect(peerId: string) {
     this.#dropPeer(peerId, true);
   }
 
@@ -309,7 +343,7 @@ export class ContentPeerPool extends EventTarget {
     this.closed = true;
     this.sendAbort.abort();
     this.signalingGeneration += 1;
-    this.signaling?.removeEventListener("message", this.onSignalingMessage);
+    if (this.onSignalingMessage) this.signaling?.removeEventListener("message", this.onSignalingMessage);
     this.session.removeEventListener("signaling-changed", this.onSignalingChanged);
     this.session.removeEventListener("statechange", this.onSessionState);
     this.session.removeEventListener("participant-disconnected", this.onParticipantDisconnected);
@@ -319,7 +353,7 @@ export class ContentPeerPool extends EventTarget {
 
   #bindSignaling() {
     if (this.closed || this.signaling === this.session.signaling) return;
-    this.signaling?.removeEventListener("message", this.onSignalingMessage);
+    if (this.onSignalingMessage) this.signaling?.removeEventListener("message", this.onSignalingMessage);
     this.signaling = this.session.signaling;
     this.signalingGeneration += 1;
     const socket = this.signaling;
@@ -334,13 +368,13 @@ export class ContentPeerPool extends EventTarget {
     }
   }
 
-  #assertCurrent(link, generation) {
+  #assertCurrent(link: ContentLink, generation: number) {
     if (this.closed || generation !== this.signalingGeneration || this.peers.get(link.peerId) !== link) {
       throw new Error("Content negotiation was superseded by signaling recovery");
     }
   }
 
-  #emitRelayPolicy(peerId, action, delayMs, bytes = null) {
+  #emitRelayPolicy(peerId: string, action: string, delayMs: number, bytes: number | null = null) {
     this.dispatchEvent(
       new CustomEvent("relay-policy", {
         detail: {
@@ -354,7 +388,7 @@ export class ContentPeerPool extends EventTarget {
     );
   }
 
-  #requireParticipant(peerId) {
+  #requireParticipant(peerId: string) {
     if (typeof peerId !== "string" || peerId === "" || peerId === this.session.participantId) {
       throw new Error("Content peer must be another lobby participant");
     }
@@ -363,9 +397,9 @@ export class ContentPeerPool extends EventTarget {
     }
   }
 
-  #createLink(peerId, connectionId, initiatedLocally) {
+  #createLink(peerId: string, connectionId: string, initiatedLocally: boolean) {
     const peer = this.peerConnectionFactory({ iceServers: this.session.iceServers ?? [] });
-    const link = {
+    const link: ContentLink = {
       peerId,
       connectionId,
       initiatedLocally,
@@ -406,7 +440,7 @@ export class ContentPeerPool extends EventTarget {
     return link;
   }
 
-  #bindChannel(link, channel) {
+  #bindChannel(link: ContentLink, channel: RTCDataChannel) {
     link.channel = channel;
     if ("binaryType" in channel) channel.binaryType = "arraybuffer";
     channel.addEventListener("open", () => this.#maybeReady(link));
@@ -423,11 +457,11 @@ export class ContentPeerPool extends EventTarget {
     });
   }
 
-  #linkReady(link) {
+  #linkReady(link: ContentLink): link is ContentLink & {channel: RTCDataChannel} {
     return link.peer.connectionState === "connected" && link.channel?.readyState === "open";
   }
 
-  #maybeReady(link) {
+  #maybeReady(link: ContentLink) {
     if (link.readyEmitted || !this.#linkReady(link)) return;
     link.readyEmitted = true;
     this.dispatchEvent(
@@ -437,7 +471,7 @@ export class ContentPeerPool extends EventTarget {
     );
   }
 
-  #enqueueSignal(event) {
+  #enqueueSignal(event: MessageEvent) {
     if (this.closed) return;
     const parsed = parseServerSignal(event);
     if (!parsed) return;
@@ -465,7 +499,7 @@ export class ContentPeerPool extends EventTarget {
     this.signalChains.set(parsed.peerId, next);
   }
 
-  async #handleSignal(peerId, envelope, generation) {
+  async #handleSignal(peerId: string, envelope: Record<string, unknown> & {connectionId: string}, generation: number) {
     if (typeof envelope.reject === "string" || envelope.close === true) {
       const link = this.peers.get(peerId);
       if (link?.connectionId === envelope.connectionId) this.#dropPeer(peerId, false);
@@ -473,14 +507,15 @@ export class ContentPeerPool extends EventTarget {
     }
 
     let link = this.peers.get(peerId);
-    if (envelope.description?.type === "offer") {
+    const description = isObject(envelope.description) ? envelope.description : null;
+    if (description?.type === "offer") {
       if (link && link.connectionId !== envelope.connectionId) {
         if (link.connectionId.localeCompare(envelope.connectionId) <= 0) {
           this.#send(peerId, envelope.connectionId, { reject: "collision" });
           return;
         }
         this.#dropPeer(peerId, false);
-        link = null;
+        link = undefined;
       }
       if (!link) {
         if (!this.hasCapacity()) {
@@ -493,12 +528,12 @@ export class ContentPeerPool extends EventTarget {
 
     if (!link || link.connectionId !== envelope.connectionId) return;
 
-    if (envelope.description) {
-      await link.peer.setRemoteDescription(envelope.description);
+    if (description && (description.type === "offer" || description.type === "answer") && typeof description.sdp === "string") {
+      await link.peer.setRemoteDescription({type: description.type, sdp: description.sdp});
       this.#assertCurrent(link, generation);
       await this.#flushCandidates(link);
       this.#assertCurrent(link, generation);
-      if (envelope.description.type === "offer") {
+      if (description.type === "offer") {
         const answer = await link.peer.createAnswer();
         this.#assertCurrent(link, generation);
         await link.peer.setLocalDescription(answer);
@@ -513,12 +548,12 @@ export class ContentPeerPool extends EventTarget {
     }
   }
 
-  async #flushCandidates(link) {
+  async #flushCandidates(link: ContentLink) {
     const candidates = link.pendingCandidates.splice(0);
     for (const candidate of candidates) await link.peer.addIceCandidate(candidate);
   }
 
-  #send(peerId, connectionId, data) {
+  #send(peerId: string, connectionId: string, data: Record<string, unknown>) {
     this.#bindSignaling();
     if (!signalingOpen(this.signaling)) throw new Error("Lobby signaling socket is not open");
     this.signaling.send(
@@ -536,7 +571,7 @@ export class ContentPeerPool extends EventTarget {
     );
   }
 
-  #dropPeer(peerId, notify) {
+  #dropPeer(peerId: string, notify: boolean) {
     const link = this.peers.get(peerId);
     if (!link) return;
     this.peers.delete(peerId);
@@ -556,13 +591,13 @@ export class ContentPeerPool extends EventTarget {
     );
   }
 
-  async #waitForCapacity(channel, highWaterMark, lowWaterMark, signals = [this.sendAbort.signal]) {
-    const abortSignals = [...new Set(signals.filter(Boolean))];
+  async #waitForCapacity(channel: RTCDataChannel, highWaterMark: number, lowWaterMark: number, signals: (AbortSignal | undefined)[] = [this.sendAbort.signal]) {
+    const abortSignals = [...new Set(signals.filter((signal): signal is AbortSignal => Boolean(signal)))];
     const aborted = () => abortSignals.some((signal) => signal.aborted);
     if (aborted()) throw new Error("Content upload was cancelled or paused for gameplay");
     if (channel.bufferedAmount < highWaterMark) return;
     channel.bufferedAmountLowThreshold = lowWaterMark;
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const cleanup = () => {
         channel.removeEventListener("bufferedamountlow", onLow);
         channel.removeEventListener("close", onClose);

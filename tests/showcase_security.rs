@@ -15,7 +15,7 @@ fn card_showcase_uses_host_validated_intents_and_hidden_views() {
     assert!(html.contains("Four-player color-match card game"));
     assert!(html.contains("Send forged card ID"));
     assert!(html.contains("Replay last intent"));
-    assert!(client.contains("./lobby-session.ts"));
+    assert!(client.contains("./demo-session.ts"));
     assert!(client.contains("./game-commands.ts"));
     assert!(client.contains("topology: \"host\""));
     assert!(client.contains("host(4)"));
@@ -28,7 +28,7 @@ fn card_showcase_uses_host_validated_intents_and_hidden_views() {
     assert!(model.contains("card-not-in-hand"));
     assert!(model.contains("illegal-card"));
     assert!(model.contains("hand: state.hands[viewerId]"));
-    assert!(model.contains("handCount: state.hands[id].length"));
+    assert!(model.contains("handCount: state.hands[id]!.length"));
 }
 
 #[test]

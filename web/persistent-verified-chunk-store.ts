@@ -1,3 +1,14 @@
+import type { ContentManifest } from "./content-manifest.ts";
+export type StoredChunk = {key: string; namespace: string; path: string; index: number; bytes: Uint8Array<ArrayBuffer>; touchedAt: number};
+export type ChunkPersistence = {
+ list: (namespace: string) => Promise<StoredChunk[]>;
+ put: (namespace: string, path: string, index: number, bytes: Uint8Array<ArrayBuffer>, touchedAt?: number) => Promise<void>;
+ touch?: (namespace: string, path: string, index: number, touchedAt?: number) => Promise<void>;
+ delete: (namespace: string, path: string, index: number) => Promise<void>;
+ deletePath: (namespace: string, path: string) => Promise<void>;
+ clear: (namespace: string) => Promise<void>;
+};
+type StoragePressure = {namespace: string; maxBytes: number; requestedBytes: number; persistedBytes: number; evictedEntries: number; evictedBytes: number};
 import { validateTrustedManifest } from "./content-verification.ts";
 import { VerifiedChunkStore } from "./verified-chunk-store.ts";
 
@@ -5,33 +16,33 @@ const DEFAULT_DATABASE = "multiplayer-verified-content-v1";
 const STORE_NAME = "chunks";
 export const DEFAULT_MAX_PERSISTED_CONTENT_BYTES = 256 * 1024 * 1024;
 
-function namespaceFor(manifest) {
+function namespaceFor(manifest: ContentManifest) {
   validateTrustedManifest(manifest);
   return `${manifest.game.id}\0${manifest.game.version}`;
 }
 
-function storageKey(namespace, path, index) {
+function storageKey(namespace: string, path: string, index: number) {
   return `${namespace}\0${path}\0${index}`;
 }
 
-function toStoredBytes(value) {
+function toStoredBytes(value: Uint8Array<ArrayBuffer>) {
   if (!(value instanceof Uint8Array)) throw new Error("Verified cache only stores Uint8Array chunks");
   return value.slice().buffer;
 }
 
-function validateMaxBytes(value) {
+function validateMaxBytes(value: number) {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error("maxBytes must be a non-negative safe integer");
   }
 }
 
-function normalizedTouchedAt(value) {
-  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+function normalizedTouchedAt(value: unknown) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
-function openDatabase(name) {
+function openDatabase(name: string) {
   if (!globalThis.indexedDB) throw new Error("IndexedDB is not available in this environment");
-  return new Promise((resolve, reject) => {
+  return new Promise<IDBDatabase>((resolve, reject) => {
     const request = globalThis.indexedDB.open(name, 1);
     request.addEventListener("upgradeneeded", () => {
       const database = request.result;
@@ -47,8 +58,8 @@ function openDatabase(name) {
   });
 }
 
-function transactionDone(transaction) {
-  return new Promise((resolve, reject) => {
+function transactionDone(transaction: IDBTransaction) {
+  return new Promise<void>((resolve, reject) => {
     transaction.addEventListener("complete", () => resolve(), { once: true });
     transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("Verified cache transaction aborted")), {
       once: true,
@@ -59,27 +70,29 @@ function transactionDone(transaction) {
   });
 }
 
-function requestResult(request, message) {
-  return new Promise((resolve, reject) => {
+function requestResult<T>(request: IDBRequest<T>, message: string) {
+  return new Promise<T>((resolve, reject) => {
     request.addEventListener("success", () => resolve(request.result), { once: true });
     request.addEventListener("error", () => reject(request.error ?? new Error(message)), { once: true });
   });
 }
 
 export class MemoryChunkPersistence {
+  entries: Map<string, StoredChunk>;
+  now: () => number;
   constructor({ now = () => Date.now() } = {}) {
     if (typeof now !== "function") throw new Error("now must be a function");
     this.entries = new Map();
     this.now = now;
   }
 
-  async list(namespace) {
+  async list(namespace: string): Promise<StoredChunk[]> {
     return [...this.entries.values()]
       .filter((entry) => entry.namespace === namespace)
       .map((entry) => ({ ...entry, bytes: entry.bytes.slice() }));
   }
 
-  async put(namespace, path, index, bytes, touchedAt = this.now()) {
+  async put(namespace: string, path: string, index: number, bytes: Uint8Array<ArrayBuffer>, touchedAt = this.now()) {
     const key = storageKey(namespace, path, index);
     this.entries.set(key, {
       key,
@@ -91,22 +104,22 @@ export class MemoryChunkPersistence {
     });
   }
 
-  async touch(namespace, path, index, touchedAt = this.now()) {
+  async touch(namespace: string, path: string, index: number, touchedAt = this.now()) {
     const entry = this.entries.get(storageKey(namespace, path, index));
     if (entry) entry.touchedAt = normalizedTouchedAt(touchedAt);
   }
 
-  async delete(namespace, path, index) {
+  async delete(namespace: string, path: string, index: number) {
     this.entries.delete(storageKey(namespace, path, index));
   }
 
-  async deletePath(namespace, path) {
+  async deletePath(namespace: string, path: string) {
     for (const [key, entry] of this.entries) {
       if (entry.namespace === namespace && entry.path === path) this.entries.delete(key);
     }
   }
 
-  async clear(namespace) {
+  async clear(namespace: string) {
     for (const [key, entry] of this.entries) {
       if (entry.namespace === namespace) this.entries.delete(key);
     }
@@ -114,6 +127,8 @@ export class MemoryChunkPersistence {
 }
 
 export class IndexedDbChunkPersistence {
+  databaseName: string;
+  databasePromise: Promise<IDBDatabase> | null;
   constructor({ databaseName = DEFAULT_DATABASE } = {}) {
     this.databaseName = databaseName;
     this.databasePromise = null;
@@ -124,11 +139,11 @@ export class IndexedDbChunkPersistence {
     return this.databasePromise;
   }
 
-  async list(namespace) {
+  async list(namespace: string): Promise<StoredChunk[]> {
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readonly");
     const index = transaction.objectStore(STORE_NAME).index("namespace");
-    const result = (await requestResult(index.getAll(namespace), "Could not read verified cache")) ?? [];
+    const result: (Omit<StoredChunk, "bytes"> & {bytes: ArrayBuffer})[] = (await requestResult(index.getAll(namespace), "Could not read verified cache")) ?? [];
     await transactionDone(transaction);
     return result.map((entry) => ({
       key: entry.key,
@@ -140,7 +155,7 @@ export class IndexedDbChunkPersistence {
     }));
   }
 
-  async put(namespace, path, index, bytes, touchedAt = Date.now()) {
+  async put(namespace: string, path: string, index: number, bytes: Uint8Array<ArrayBuffer>, touchedAt = Date.now()) {
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readwrite");
     transaction.objectStore(STORE_NAME).put({
@@ -154,7 +169,7 @@ export class IndexedDbChunkPersistence {
     await transactionDone(transaction);
   }
 
-  async touch(namespace, path, index, touchedAt = Date.now()) {
+  async touch(namespace: string, path: string, index: number, touchedAt = Date.now()) {
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
@@ -167,14 +182,14 @@ export class IndexedDbChunkPersistence {
     await transactionDone(transaction);
   }
 
-  async delete(namespace, path, index) {
+  async delete(namespace: string, path: string, index: number) {
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readwrite");
     transaction.objectStore(STORE_NAME).delete(storageKey(namespace, path, index));
     await transactionDone(transaction);
   }
 
-  async deletePath(namespace, path) {
+  async deletePath(namespace: string, path: string) {
     const entries = await this.list(namespace);
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readwrite");
@@ -185,7 +200,7 @@ export class IndexedDbChunkPersistence {
     await transactionDone(transaction);
   }
 
-  async clear(namespace) {
+  async clear(namespace: string) {
     const entries = await this.list(namespace);
     const database = await this.#database();
     const transaction = database.transaction(STORE_NAME, "readwrite");
@@ -196,13 +211,20 @@ export class IndexedDbChunkPersistence {
 }
 
 export class PersistentVerifiedChunkStore extends VerifiedChunkStore {
+  persistence: ChunkPersistence;
+  namespace: string;
+  maxBytes: number;
+  onStoragePressure: ((detail: StoragePressure) => void) | null;
+  now: () => number;
+  lastTouchedAt: number;
+  ready: Promise<{accepted: number; rejected: number}>;
   constructor({
     manifest,
     persistence = new IndexedDbChunkPersistence(),
     maxBytes = DEFAULT_MAX_PERSISTED_CONTENT_BYTES,
     onStoragePressure = null,
     now = () => Date.now(),
-  } = {}) {
+  }: {manifest: ContentManifest; persistence?: ChunkPersistence; maxBytes?: number; onStoragePressure?: ((detail: StoragePressure) => void) | null; now?: () => number}) {
     super({ manifest });
     validateMaxBytes(maxBytes);
     if (onStoragePressure !== null && typeof onStoragePressure !== "function") {
@@ -293,7 +315,7 @@ export class PersistentVerifiedChunkStore extends VerifiedChunkStore {
     };
   }
 
-  getChunk(path, index) {
+  override getChunk(path: string, index: number) {
     const chunk = super.getChunk(path, index);
     if (chunk && typeof this.persistence.touch === "function") {
       const touchedAt = this.#stamp();
@@ -304,32 +326,35 @@ export class PersistentVerifiedChunkStore extends VerifiedChunkStore {
     return chunk;
   }
 
-  async putChunk(path, index, value) {
+  override async putChunk(path: string, index: number, value: unknown) {
     await this.ready;
     const verification = await super.putChunk(path, index, value);
     const verified = super.getChunk(path, index);
+    if (!verified) throw new Error("Verified chunk disappeared before persistence");
     await this.persistence.put(this.namespace, path, index, verified, this.#stamp());
     await this.#enforceBudget();
     return verification;
   }
 
-  async putFile(path, value) {
+  override async putFile(path: string, value: unknown) {
     await this.ready;
     const result = await super.putFile(path, value);
     for (const index of super.availableChunks(path)) {
-      await this.persistence.put(this.namespace, path, index, super.getChunk(path, index), this.#stamp());
+      const chunk = super.getChunk(path, index);
+      if (!chunk) throw new Error("Verified chunk disappeared before persistence");
+      await this.persistence.put(this.namespace, path, index, chunk, this.#stamp());
     }
     await this.#enforceBudget();
     return result;
   }
 
-  async clearPath(path) {
+  override async clearPath(path: string) {
     await this.ready;
     super.clearPath(path);
     await this.persistence.deletePath(this.namespace, path);
   }
 
-  async clear() {
+  override async clear() {
     await this.ready;
     super.clear();
     await this.persistence.clear(this.namespace);

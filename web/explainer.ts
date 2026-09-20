@@ -1,3 +1,4 @@
+import { requiredElement } from "./dom.ts";
 import { topologyEdgeCount } from "./arena-model.ts";
 
 const phaseCopy = {
@@ -15,13 +16,13 @@ const phaseCopy = {
   },
 };
 
-const mechanism = document.querySelector("#mechanism-shell");
-const phaseTitle = document.querySelector("#phase-title");
-const phaseBody = document.querySelector("#phase-body");
-const phaseButtons = [...document.querySelectorAll("[data-phase-button]")];
+const mechanism = requiredElement("#mechanism-shell", HTMLElement);
+const phaseTitle = requiredElement("#phase-title", HTMLElement);
+const phaseBody = requiredElement("#phase-body", HTMLElement);
+const phaseButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-phase-button]")];
 
-function setPhase(phase) {
-  if (!phaseCopy[phase]) return;
+function setPhase(phase: string | undefined) {
+  if (phase !== "create" && phase !== "signal" && phase !== "direct") return;
   mechanism.dataset.phase = phase;
   phaseTitle.textContent = phaseCopy[phase].title;
   phaseBody.textContent = phaseCopy[phase].body;
@@ -34,22 +35,22 @@ for (const button of phaseButtons) {
   button.addEventListener("click", () => setPhase(button.dataset.phaseButton));
 }
 
-const svg = document.querySelector("#network-graph");
-const topologyButtons = [...document.querySelectorAll("[data-topology]")];
-const playerRange = document.querySelector("#participant-count-control");
-const playerOutput = document.querySelector("#participant-count-output");
-const topologyTitle = document.querySelector("#topology-title");
-const topologyResult = document.querySelector("#topology-result");
-const topologyNote = document.querySelector("#topology-note");
+const svg = requiredElement("#network-graph", SVGSVGElement);
+const topologyButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-topology]")];
+const playerRange = requiredElement("#participant-count-control", HTMLInputElement);
+const playerOutput = requiredElement("#participant-count-output", HTMLOutputElement);
+const topologyTitle = requiredElement("#topology-title", HTMLElement);
+const topologyResult = requiredElement("#topology-result", HTMLElement);
+const topologyNote = requiredElement("#topology-note", HTMLElement);
 let topology = "mesh";
 
-function svgElement(name, attributes = {}) {
+function svgElement(name: string, attributes: Record<string, string | number> = {}) {
   const element = document.createElementNS("http://www.w3.org/2000/svg", name);
-  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
+  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, String(value));
   return element;
 }
 
-function meshPositions(count) {
+function meshPositions(count: number) {
   const center = 250;
   const radius = count <= 4 ? 150 : 182;
   return Array.from({ length: count }, (_, index) => {
@@ -61,7 +62,7 @@ function meshPositions(count) {
   });
 }
 
-function hostPositions(count) {
+function hostPositions(count: number) {
   const positions = [{ x: 250, y: 250 }];
   const guests = count - 1;
   const radius = guests <= 4 ? 150 : 185;
@@ -82,7 +83,7 @@ function renderTopology() {
   svg.replaceChildren();
 
   const positions = topology === "mesh" ? meshPositions(count) : hostPositions(count);
-  const edges = [];
+  const edges: [number, number][] = [];
   if (topology === "mesh") {
     for (let left = 0; left < count; left += 1) {
       for (let right = left + 1; right < count; right += 1) edges.push([left, right]);
@@ -94,17 +95,17 @@ function renderTopology() {
   for (const [from, to] of edges) {
     svg.append(
       svgElement("line", {
-        x1: positions[from].x,
-        y1: positions[from].y,
-        x2: positions[to].x,
-        y2: positions[to].y,
+        x1: positions[from]!.x,
+        y1: positions[from]!.y,
+        x2: positions[to]!.x,
+        y2: positions[to]!.y,
         class: `graph-edge${topology === "host" ? " host-edge" : ""}`,
       }),
     );
   }
 
   for (let index = 0; index < count; index += 1) {
-    const { x, y } = positions[index];
+    const { x, y } = positions[index]!;
     const isHost = topology === "host" && index === 0;
     svg.append(
       svgElement("circle", {
@@ -137,7 +138,7 @@ function renderTopology() {
 
 for (const button of topologyButtons) {
   button.addEventListener("click", () => {
-    topology = button.dataset.topology;
+    topology = button.dataset.topology === "host" ? "host" : "mesh";
     for (const candidate of topologyButtons) {
       candidate.setAttribute("aria-pressed", String(candidate === button));
     }
@@ -146,12 +147,12 @@ for (const button of topologyButtons) {
 }
 playerRange.addEventListener("input", renderTopology);
 
-const endpointInput = document.querySelector("#endpoint-input");
-const endpointButton = document.querySelector("#endpoint-apply");
-const endpointStatus = document.querySelector("#endpoint-status");
-const demoLinks = [...document.querySelectorAll("[data-demo-link]")];
+const endpointInput = requiredElement("#endpoint-input", HTMLInputElement);
+const endpointButton = requiredElement("#endpoint-apply", HTMLButtonElement);
+const endpointStatus = requiredElement("#endpoint-status", HTMLElement);
+const demoLinks = [...document.querySelectorAll<HTMLAnchorElement>("[data-demo-link]")];
 
-function normalizedEndpoint(value) {
+function normalizedEndpoint(value: string) {
   const trimmed = value.trim().replace(/\/$/, "");
   if (!trimmed) return "";
   try {
@@ -163,9 +164,9 @@ function normalizedEndpoint(value) {
   }
 }
 
-function updateDemoLinks(endpoint, persist = true) {
+function updateDemoLinks(endpoint: string, persist = true) {
   for (const link of demoLinks) {
-    const url = new URL(link.dataset.demoLink, window.location.href);
+    const url = new URL(link.dataset.demoLink ?? link.href, window.location.href);
     if (endpoint) url.searchParams.set("api", endpoint);
     link.href = `${url.pathname.split("/").at(-1)}${url.search}`;
   }

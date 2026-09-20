@@ -1,3 +1,9 @@
+import type { ContentManifest } from "./content-manifest.ts";
+import type { ContentTransport } from "./content-types.ts";
+import type { ContentData, Timer } from "./events.ts";
+import type { VerifiedChunkStore } from "./verified-chunk-store.ts";
+export type ChunkResult = {peerId: string; path: string; requestId: number; received: number[]; missing: number[]};
+type PendingRequest = {peerId: string; requestId: number; path: string; requested: number[]; received: Set<number>; timeout: Timer; resolve: (result: ChunkResult) => void; reject: (error: unknown) => void};
 import { manifestFile, validateTrustedManifest } from "./content-verification.ts";
 
 export const CONTENT_CHUNK_EXCHANGE_PROTOCOL = 1;
@@ -10,19 +16,19 @@ const MAX_CONTROL_BYTES = 8 * 1024;
 const DEFAULT_MAX_PENDING_REQUESTS = 32;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 
-function isObject(value) {
+function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function validRequestId(value) {
-  return Number.isInteger(value) && value > 0 && value <= 0xffff_ffff;
+function validRequestId(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 0xffff_ffff;
 }
 
-function requestKey(peerId, requestId) {
+function requestKey(peerId: string, requestId: number) {
   return `${peerId}:${requestId}`;
 }
 
-async function toBytes(value) {
+async function toBytes(value: unknown) {
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) {
@@ -34,7 +40,7 @@ async function toBytes(value) {
   throw new Error("Chunk exchange payload must be binary data");
 }
 
-function requireExchangeableFile(manifest, path) {
+function requireExchangeableFile(manifest: ContentManifest, path: string) {
   const file = manifestFile(manifest, path);
   if (!file.chunks || file.chunks.sha256.length === 0) {
     throw new Error(`Content does not define transferable trusted chunks: ${path}`);
@@ -44,10 +50,10 @@ function requireExchangeableFile(manifest, path) {
       `Trusted chunk size for ${path} exceeds the ${MAX_EXCHANGE_CHUNK_BYTES}-byte exchange limit`,
     );
   }
-  return file;
+  return { ...file, chunks: file.chunks };
 }
 
-function normalizeIndexes(file, indexes) {
+function normalizeIndexes(file: ReturnType<typeof requireExchangeableFile>, indexes: unknown): number[] {
   if (!Array.isArray(indexes) || indexes.length === 0 || indexes.length > MAX_CHUNKS_PER_REQUEST) {
     throw new Error(`Chunk request must contain between 1 and ${MAX_CHUNKS_PER_REQUEST} indexes`);
   }
@@ -66,7 +72,7 @@ function normalizeIndexes(file, indexes) {
   return normalized;
 }
 
-function parseControl(value) {
+function parseControl(value: unknown) {
   if (typeof value !== "string") return null;
   if (new TextEncoder().encode(value).byteLength > MAX_CONTROL_BYTES) {
     throw new Error("Chunk exchange control message is too large");
@@ -83,7 +89,7 @@ function parseControl(value) {
   return message;
 }
 
-function createChunkFrame(requestId, index, payload) {
+function createChunkFrame(requestId: number, index: number, payload: Uint8Array) {
   const frame = new Uint8Array(CHUNK_FRAME_HEADER_BYTES + payload.byteLength);
   const view = new DataView(frame.buffer);
   view.setUint32(0, CHUNK_FRAME_MAGIC);
@@ -93,7 +99,7 @@ function createChunkFrame(requestId, index, payload) {
   return frame.buffer;
 }
 
-async function parseChunkFrame(value) {
+async function parseChunkFrame(value: unknown) {
   const bytes = await toBytes(value);
   if (bytes.byteLength < CHUNK_FRAME_HEADER_BYTES) {
     throw new Error("Chunk exchange frame is too short");
@@ -109,11 +115,11 @@ async function parseChunkFrame(value) {
   };
 }
 
-function randomRequestId(pendingRequests) {
+function randomRequestId(pendingRequests: Map<string, PendingRequest>) {
   const values = new Uint32Array(1);
   for (let attempt = 0; attempt < 16; attempt += 1) {
     globalThis.crypto.getRandomValues(values);
-    const value = values[0];
+    const value = values[0]!;
     if (value === 0) continue;
     if (![...pendingRequests.values()].some((pending) => pending.requestId === value)) return value;
   }
@@ -121,13 +127,23 @@ function randomRequestId(pendingRequests) {
 }
 
 export class ContentChunkExchange extends EventTarget {
+  transport: ContentTransport;
+  manifest: ContentManifest;
+  store: VerifiedChunkStore;
+  maxPendingRequests: number;
+  requestTimeoutMs: number;
+  pendingRequests: Map<string, PendingRequest>;
+  peerChains: Map<string, Promise<void>>;
+  closed: boolean;
+  onContent: (event: CustomEvent<{peerId: string; data: ContentData}>) => void;
+  onPeerClosed: (event: CustomEvent<{peerId: string}>) => void;
   constructor({
     transport,
     manifest,
     store,
     maxPendingRequests = DEFAULT_MAX_PENDING_REQUESTS,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
-  } = {}) {
+  }: {transport: ContentTransport; manifest: ContentManifest; store: VerifiedChunkStore; maxPendingRequests?: number; requestTimeoutMs?: number}) {
     super();
     if (!transport || transport.contentSharing !== true) {
       throw new Error("ContentChunkExchange requires a content-enabled transport");
@@ -158,7 +174,7 @@ export class ContentChunkExchange extends EventTarget {
     transport.addEventListener("content-peer-closed", this.onPeerClosed);
   }
 
-  async requestChunks(peerId, path, indexes) {
+  async requestChunks(peerId: string, path: string, indexes: number[]): Promise<ChunkResult> {
     if (this.closed) throw new Error("ContentChunkExchange is closed");
     if (typeof peerId !== "string" || peerId === "") throw new Error("peerId is required");
     const file = requireExchangeableFile(this.manifest, path);
@@ -169,10 +185,7 @@ export class ContentChunkExchange extends EventTarget {
 
     const requestId = randomRequestId(this.pendingRequests);
     const key = requestKey(peerId, requestId);
-    let settle;
-    const result = new Promise((resolve, reject) => {
-      settle = { resolve, reject };
-    });
+    const { promise: result, resolve, reject } = Promise.withResolvers<ChunkResult>();
     const timeout = setTimeout(() => {
       const pending = this.pendingRequests.get(key);
       if (!pending) return;
@@ -187,8 +200,8 @@ export class ContentChunkExchange extends EventTarget {
       requested,
       received: new Set(),
       timeout,
-      resolve: settle.resolve,
-      reject: settle.reject,
+      resolve,
+      reject,
     });
 
     try {
@@ -220,7 +233,7 @@ export class ContentChunkExchange extends EventTarget {
     this.peerChains.clear();
   }
 
-  #enqueue(peerId, data) {
+  #enqueue(peerId: string, data: unknown) {
     if (this.closed || typeof peerId !== "string" || peerId === "") return;
     const previous = this.peerChains.get(peerId) ?? Promise.resolve();
     const next = previous
@@ -231,7 +244,7 @@ export class ContentChunkExchange extends EventTarget {
     this.peerChains.set(peerId, next);
   }
 
-  async #handleMessage(peerId, data) {
+  async #handleMessage(peerId: string, data: unknown) {
     const control = parseControl(data);
     if (control) {
       if (control.type === "chunk-request") await this.#serveRequest(peerId, control);
@@ -243,7 +256,7 @@ export class ContentChunkExchange extends EventTarget {
     await this.#acceptChunk(peerId, data);
   }
 
-  async #serveRequest(peerId, message) {
+  async #serveRequest(peerId: string, message: Record<string, unknown>) {
     if (!validRequestId(message.requestId) || typeof message.path !== "string") {
       throw new Error("Invalid incoming chunk request");
     }
@@ -273,7 +286,7 @@ export class ContentChunkExchange extends EventTarget {
     );
   }
 
-  async #acceptChunk(peerId, data) {
+  async #acceptChunk(peerId: string, data: unknown) {
     const frame = await parseChunkFrame(data);
     const key = requestKey(peerId, frame.requestId);
     const pending = this.pendingRequests.get(key);
@@ -306,7 +319,7 @@ export class ContentChunkExchange extends EventTarget {
     );
   }
 
-  #completeRequest(peerId, message) {
+  #completeRequest(peerId: string, message: Record<string, unknown>) {
     if (!validRequestId(message.requestId)) throw new Error("Invalid chunk completion id");
     const key = requestKey(peerId, message.requestId);
     const pending = this.pendingRequests.get(key);
@@ -325,14 +338,14 @@ export class ContentChunkExchange extends EventTarget {
     });
   }
 
-  #handleRemoteError(peerId, message) {
+  #handleRemoteError(peerId: string, message: Record<string, unknown>) {
     if (!validRequestId(message.requestId)) throw new Error("Invalid chunk error id");
     const key = requestKey(peerId, message.requestId);
     if (!this.pendingRequests.has(key)) return;
     this.#rejectRequest(key, new Error(`Peer rejected chunk request: ${String(message.code ?? "error")}`));
   }
 
-  async #sendError(peerId, requestId, code) {
+  async #sendError(peerId: string, requestId: number, code: string) {
     if (!validRequestId(requestId)) return;
     await this.transport.sendContent(
       peerId,
@@ -345,7 +358,7 @@ export class ContentChunkExchange extends EventTarget {
     );
   }
 
-  #rejectRequest(key, error) {
+  #rejectRequest(key: string, error: unknown) {
     const pending = this.pendingRequests.get(key);
     if (!pending) return;
     this.pendingRequests.delete(key);
@@ -353,7 +366,7 @@ export class ContentChunkExchange extends EventTarget {
     pending.reject(error instanceof Error ? error : new Error(String(error)));
   }
 
-  #rejectPeer(peerId, message) {
+  #rejectPeer(peerId: string, message: string) {
     if (typeof peerId !== "string") return;
     for (const [key, pending] of this.pendingRequests) {
       if (pending.peerId === peerId) this.#rejectRequest(key, new Error(message));

@@ -1,81 +1,22 @@
-export const CONTENT_MANIFEST_PROTOCOL = "multiplayer-content-manifest-v1";
+import type { ContentManifest } from "./content-manifest.ts";
+import type { ManifestTrustOptions } from "./signed-content-manifest.ts";
+export type ManifestFetchOptions = ManifestTrustOptions & {fetchImpl?: typeof fetch; allowedOrigins?: string[] | null};
+import { CONTENT_MANIFEST_PROTOCOL, validateTrustedManifest } from "./content-manifest.ts";
+import { resolveTrustedManifest } from "./signed-content-manifest.ts";
+export { CONTENT_MANIFEST_PROTOCOL, validateTrustedManifest } from "./content-manifest.ts";
 
-const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-const MAX_MANIFEST_FILES = 10_000;
-const MAX_MANIFEST_CHUNKS = 250_000;
-const MAX_CHUNK_BYTES = 1_048_576;
-const MAX_PATH_LENGTH = 1_024;
-const ALLOWED_ROLES = new Set(["asset", "logic"]);
-
-function isObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function requireNonEmptyString(value, field) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`${field} must be a non-empty string`);
-  }
-  return value;
-}
-
-function requireSafePath(path) {
-  requireNonEmptyString(path, "file.path");
-  if (path.length > MAX_PATH_LENGTH) throw new Error("file.path is too long");
-  if (path.startsWith("/") || path.includes("\\") || path.includes("\0")) {
-    throw new Error(`Unsafe manifest path: ${path}`);
-  }
-  const segments = path.split("/");
-  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-    throw new Error(`Unsafe manifest path: ${path}`);
-  }
-  return path;
-}
-
-function requireSha256(value, field = "file.sha256") {
-  if (typeof value !== "string" || !SHA256_PATTERN.test(value)) {
-    throw new Error(`${field} must be a lowercase SHA-256 hex digest`);
-  }
-  return value;
-}
-
-function requireBytes(value) {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error("file.bytes must be a non-negative safe integer");
-  }
-  return value;
-}
-
-function validateChunking(file) {
-  if (file.chunks == null) return 0;
-  if (!isObject(file.chunks)) throw new Error("file.chunks must be an object");
-  if (!Number.isSafeInteger(file.chunks.bytes) || file.chunks.bytes < 1 || file.chunks.bytes > MAX_CHUNK_BYTES) {
-    throw new Error(`file.chunks.bytes must be between 1 and ${MAX_CHUNK_BYTES}`);
-  }
-  if (!Array.isArray(file.chunks.sha256)) {
-    throw new Error("file.chunks.sha256 must be an array");
-  }
-  const expectedChunks = file.bytes === 0 ? 0 : Math.ceil(file.bytes / file.chunks.bytes);
-  if (file.chunks.sha256.length !== expectedChunks) {
-    throw new Error(`file.chunks.sha256 must contain exactly ${expectedChunks} hashes`);
-  }
-  for (const [index, hash] of file.chunks.sha256.entries()) {
-    requireSha256(hash, `file.chunks.sha256[${index}]`);
-  }
-  return expectedChunks;
-}
-
-function isLoopbackHostname(hostname) {
+function isLoopbackHostname(hostname: string) {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
-function trustedManifestUrl(value) {
+function trustedManifestUrl(value: string) {
   const url = new URL(value);
   if (url.protocol === "https:") return url;
   if (url.protocol === "http:" && isLoopbackHostname(url.hostname)) return url;
   throw new Error("Trusted content manifests must use HTTPS (HTTP is allowed only on loopback)");
 }
 
-function normalizeAllowedOrigins(allowedOrigins) {
+function normalizeAllowedOrigins(allowedOrigins: string[] | null) {
   if (allowedOrigins == null) return null;
   if (!Array.isArray(allowedOrigins) || allowedOrigins.length === 0) {
     throw new Error("allowedOrigins must be a non-empty array when provided");
@@ -83,16 +24,16 @@ function normalizeAllowedOrigins(allowedOrigins) {
   return new Set(allowedOrigins.map((origin) => new URL(origin).origin));
 }
 
-function bytesFrom(value) {
-  if (value instanceof Uint8Array) return value;
+function bytesFrom(value: unknown): Uint8Array<ArrayBuffer> | null {
+  if (value instanceof Uint8Array) return new Uint8Array(value);
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    return new Uint8Array(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
   }
   return null;
 }
 
-async function contentBytes(value) {
+async function contentBytes(value: unknown) {
   const bytes = bytesFrom(value);
   if (bytes) return bytes;
   if (typeof Blob !== "undefined" && value instanceof Blob) {
@@ -101,49 +42,15 @@ async function contentBytes(value) {
   throw new Error("Content must be an ArrayBuffer, typed array, DataView, or Blob");
 }
 
-async function sha256Hex(value) {
+async function sha256Hex(value: unknown) {
   const bytes = await contentBytes(value);
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function validateTrustedManifest(manifest) {
-  if (!isObject(manifest)) throw new Error("Content manifest must be an object");
-  if (manifest.protocol !== CONTENT_MANIFEST_PROTOCOL) {
-    throw new Error(`Unsupported content manifest protocol: ${String(manifest.protocol)}`);
-  }
-  if (!isObject(manifest.game)) throw new Error("manifest.game must be an object");
-  requireNonEmptyString(manifest.game.id, "manifest.game.id");
-  requireNonEmptyString(manifest.game.version, "manifest.game.version");
-  if (!Array.isArray(manifest.files)) throw new Error("manifest.files must be an array");
-  if (manifest.files.length > MAX_MANIFEST_FILES) {
-    throw new Error(`manifest.files exceeds the ${MAX_MANIFEST_FILES} file limit`);
-  }
-
-  const paths = new Set();
-  let totalChunks = 0;
-  for (const file of manifest.files) {
-    if (!isObject(file)) throw new Error("Each manifest file must be an object");
-    const path = requireSafePath(file.path);
-    if (paths.has(path)) throw new Error(`Duplicate manifest path: ${path}`);
-    paths.add(path);
-    requireBytes(file.bytes);
-    requireSha256(file.sha256);
-    if (!ALLOWED_ROLES.has(file.role)) {
-      throw new Error("file.role must be 'asset' or 'logic'");
-    }
-    totalChunks += validateChunking(file);
-    if (totalChunks > MAX_MANIFEST_CHUNKS) {
-      throw new Error(`manifest exceeds the ${MAX_MANIFEST_CHUNKS} chunk-hash limit`);
-    }
-  }
-
-  return manifest;
-}
-
 export async function fetchTrustedManifest(
-  manifestUrl,
-  { fetchImpl = globalThis.fetch, allowedOrigins = null } = {},
+  manifestUrl: string,
+  { fetchImpl = globalThis.fetch, allowedOrigins = null, trustedKeys = null, revokedKeyIds = null, allowUnsignedAssets = true }: ManifestFetchOptions = {},
 ) {
   const url = trustedManifestUrl(manifestUrl);
   const origins = normalizeAllowedOrigins(allowedOrigins);
@@ -162,18 +69,18 @@ export async function fetchTrustedManifest(
     throw new Error(`Trusted manifest request failed with ${response.status}`);
   }
 
-  const manifest = validateTrustedManifest(await response.json());
+  const manifest = await resolveTrustedManifest(await response.json(), { trustedKeys, revokedKeyIds, allowUnsignedAssets });
   return { manifest, manifestUrl: url.href };
 }
 
-export function manifestFile(manifest, path) {
+export function manifestFile(manifest: ContentManifest, path: string) {
   validateTrustedManifest(manifest);
   const file = manifest.files.find((entry) => entry.path === path);
   if (!file) throw new Error(`Content is not authorized by the trusted manifest: ${path}`);
   return file;
 }
 
-export async function verifyContent(manifest, path, value) {
+export async function verifyContent(manifest: ContentManifest, path: string, value: unknown) {
   const file = manifestFile(manifest, path);
   const bytes = await contentBytes(value);
   if (bytes.byteLength !== file.bytes) {
@@ -191,7 +98,7 @@ export async function verifyContent(manifest, path, value) {
   };
 }
 
-export async function verifyContentChunk(manifest, path, index, value) {
+export async function verifyContentChunk(manifest: ContentManifest, path: string, index: number, value: unknown) {
   const file = manifestFile(manifest, path);
   if (!file.chunks) throw new Error(`Content does not define trusted chunk hashes: ${path}`);
   if (!Number.isInteger(index) || index < 0 || index >= file.chunks.sha256.length) {
@@ -216,14 +123,14 @@ export async function verifyContentChunk(manifest, path, index, value) {
   };
 }
 
-function trustedLogicFiles(manifest) {
+function trustedLogicFiles(manifest: ContentManifest) {
   return manifest.files
     .filter((file) => file.role === "logic")
     .slice()
     .sort((left, right) => left.path.localeCompare(right.path));
 }
 
-export async function logicFingerprint(manifest) {
+export async function logicFingerprint(manifest: ContentManifest) {
   validateTrustedManifest(manifest);
   const canonical = trustedLogicFiles(manifest)
     .map((file) => `${file.path}\0${file.bytes}\0${file.sha256}`)
@@ -232,7 +139,7 @@ export async function logicFingerprint(manifest) {
   return sha256Hex(new TextEncoder().encode(source));
 }
 
-export async function verifyLogicSet(manifest, contentByPath) {
+export async function verifyLogicSet(manifest: ContentManifest, contentByPath: Map<string, unknown>) {
   validateTrustedManifest(manifest);
   if (!(contentByPath instanceof Map)) {
     throw new Error("contentByPath must be a Map keyed by trusted manifest path");

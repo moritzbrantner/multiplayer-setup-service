@@ -68,7 +68,7 @@ test("trusted manifest fetch is HTTPS-only except for local development", async 
   const result = await fetchTrustedManifest("http://localhost:8080/game.manifest.json", {
     fetchImpl: async (url, options) => {
       requested = { url: String(url), options };
-      return { ok: true, status: 200, async json() { return manifest(); } };
+      return { ok: true, status: 200, async json() { return manifest({ files: [manifest().files[0]] }); } };
     },
   });
   assert.equal(result.manifest.game.id, "example-game");
@@ -79,7 +79,7 @@ test("trusted manifest fetch is HTTPS-only except for local development", async 
 });
 
 test("games can restrict manifests to explicitly configured trusted origins", async () => {
-  const fetchImpl = async () => ({ ok: true, status: 200, async json() { return manifest(); } });
+  const fetchImpl = async () => ({ ok: true, status: 200, async json() { return manifest({ files: [manifest().files[0]] }); } });
   await assert.rejects(
     () => fetchTrustedManifest("https://cdn.example/game.manifest.json", {
       fetchImpl,
@@ -135,4 +135,11 @@ test("logic fingerprint is deterministic regardless of manifest file order", asy
   const value = manifest();
   const reversed = manifest({ files: [...value.files].reverse() });
   assert.equal(await logicFingerprint(value), await logicFingerprint(reversed));
+});
+
+
+test("public manifest loader rejects unsigned execution-critical logic", async () => {
+  await assert.rejects(() => fetchTrustedManifest("https://game.example/manifest.json", {
+    fetchImpl: async () => ({ ok: true, async json() { return manifest(); } }),
+  }), /requires a signed trusted manifest/);
 });

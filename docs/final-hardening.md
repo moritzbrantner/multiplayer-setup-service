@@ -22,22 +22,24 @@ Ordinary lobby operations inspect and reject the addressed lobby immediately whe
 
 ## Client recovery and optional uploads
 
-`ResilientLobbySession` emits `signaling-changed` with `{ socket, previousSocket }` when its socket is replaced or cleared. Old socket messages cannot mutate the recovered session. `ContentPeerPool` rebinds immediately, cancels incomplete negotiation, ignores stale continuations and retired-link events, and keeps locally ready content links intact during rebinding. Remote participant-disconnect behavior remains unchanged; a new content connection may still be necessary. Closing the session closes its dependent pool.
+`ResilientLobbySession` emits `signaling-changed` with `{ socket, previousSocket }` when its socket is replaced or cleared. Old socket messages cannot mutate the recovered session. `ContentPeerPool` rebinds immediately, cancels incomplete negotiation, ignores stale continuations and retired-link events, and keeps locally ready content links intact during rebinding. A remote signaling disconnect no longer drops a healthy gameplay link or removes its participant from the local roster; `participant-signaling-disconnected` reports signaling presence separately. Unready links may still require fresh negotiation. Closing the session closes its dependent pool.
 
-`ContentUploadBudget` supplies a session-shared application token bucket to all default `ContentPeerPool` instances: 1 MiB/second with a 1 MiB burst, at most 64 waiting sends and 4 MiB of waiting payload sizes. A game can inject a custom budget into pools or call `pool.uploadBudget.setPaused(true)` to prioritize gameplay, then resume with `setPaused(false)`. Pausing rejects waiting uploads rather than accumulating them. Consumers may resume missing verified chunks after cancellation. Gameplay channels are not routed through this budget. This budget applies to content pools, not to arbitrary application networking or the legacy session content-channel API, and is not a wire-bandwidth guarantee.
+`ContentUploadBudget` supplies a session-shared application token bucket to all default `ContentPeerPool` instances: 1 MiB/second with a 1 MiB burst, at most 64 waiting sends and 4 MiB of waiting payload sizes. A game can inject a custom budget into pools or call `sessionUploadBudget(session).setPaused(true)` to prioritize gameplay, then resume with `setPaused(false)`. Pausing rejects waiting uploads rather than accumulating them. Consumers may resume missing verified chunks after cancellation. Gameplay channels are not routed through this budget. This budget applies to content pools, not to arbitrary application networking or the legacy session content-channel API, and is not a wire-bandwidth guarantee.
 
 TURN policy remains separate and defaults to denying positively identified relay paths. The selected route is rechecked after delayed sends; a direct-to-relay transition cannot silently bypass denial. A transition into limited relay mode requires retry under that limiter. Route-stat caching is intentionally deferred: no measured benefit justifies caching a possibly stale direct classification.
 
 ## Automated evidence
 
-The existing Rust, HTTP, browser-model, performance and identical-workload runtime-profile checks remain in place. `Browser Acceptance` adds two isolated real Chromium contexts in desktop and touch-emulated configurations. It uses the real Rust binary, actual WebSockets, actual RTCPeerConnections and a loopback-only coturn fixture. It covers direct channels, capability-preserving signaling replacement, fresh content negotiation after recovery, verified chunk resume, forced relay with service-issued credentials, relay bulk denial/opt-in, and gameplay while bulk uploads are paused. Test retries are disabled. Browser versions, scoped acceptance results, and failure traces are retained as artifacts.
+The existing Rust, HTTP, browser-model, performance and identical-workload runtime-profile checks remain in place. `Browser Acceptance` adds two isolated real Chromium contexts in desktop and touch-emulated configurations. It uses the real Rust binary, actual WebSockets, actual RTCPeerConnections and a loopback-only coturn fixture. It covers all four demo pages, automatic TURN fallback after stalled ICE, gameplay continuing over the same peer connections during capability-preserving signaling replacement, fresh content negotiation after recovery, verified chunk resume, forced relay with service-issued credentials, relay bulk denial/opt-in, and gameplay while bulk uploads are paused. Test retries are disabled. Browser versions, scoped acceptance results, and failure traces are retained as artifacts.
 
-Run locally after installing the repository Rust toolchain, Bun version from `package.tson`, and coturn:
+Run locally after installing the repository Rust toolchain, Bun version from `package.json`, and coturn:
 
 ```sh
 cargo build --release --locked --bin multiplayer-setup-service
 bun install --frozen-lockfile --ignore-scripts
-bunx playwright install --with-deps chromium
+e2e/node_modules/.bin/playwright install --with-deps chromium
+bun run typecheck
+bun run build:web
 cd e2e
 bun run test
 ```

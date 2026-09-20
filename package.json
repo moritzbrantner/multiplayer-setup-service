@@ -7,6 +7,14 @@
     "e2e"
   ],
   "scripts": {
-    "build:web": "bun --cwd web run build"
-  }
+    "build:web": "bun run --cwd web build",
+    "profile:runtime": "cargo run --release --locked --bin profile-stores",
+    "typecheck": "tsc --noEmit && tsc --noEmit --project e2e/tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "@types/node": "24.10.1",
+    "typescript": "7.0.2"
+  },
+  "type": "module"
 }

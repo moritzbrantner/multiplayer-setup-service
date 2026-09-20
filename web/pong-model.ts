@@ -1,4 +1,5 @@
-export function movePaddleToward(currentY, targetY, dt, speed, minY, maxY) {
+import { isRecord } from "./events.ts";
+export function movePaddleToward(currentY: number, targetY: number, dt: number, speed: number, minY: number, maxY: number) {
   if (![currentY, targetY, dt, speed, minY, maxY].every(Number.isFinite)) {
     throw new Error("Paddle motion inputs must be finite numbers");
   }
@@ -10,16 +11,16 @@ export function movePaddleToward(currentY, targetY, dt, speed, minY, maxY) {
   return Math.max(minY, Math.min(maxY, currentY + step));
 }
 
-export function validPongScoreMessage(message) {
-  return Boolean(
-    message?.kind === "pong-score" &&
-    Number.isSafeInteger(message.hostScore) &&
+export function validPongScoreMessage(message: unknown): message is {kind: "pong-score"; hostScore: number; guestScore: number} {
+  return (
+    isRecord(message) && message.kind === "pong-score" &&
+    typeof message.hostScore === "number" && Number.isSafeInteger(message.hostScore) &&
     message.hostScore >= 0 &&
-    Number.isSafeInteger(message.guestScore) &&
+    typeof message.guestScore === "number" && Number.isSafeInteger(message.guestScore) &&
     message.guestScore >= 0
   );
 }
 
-export function mayAcceptPongScore(role, message) {
+export function mayAcceptPongScore(role: string | null, message: unknown): message is {kind: "pong-score"; hostScore: number; guestScore: number} {
   return role === "guest" && validPongScoreMessage(message);
 }

@@ -222,3 +222,134 @@ test("failed direct peer escalates to TURN and sends an ICE-restart offer", asyn
   assert.ok(recoveryOffer);
   session.close();
 });
+
+
+test("remote signaling disconnect and reconnect roster preserve healthy gameplay", async () => {
+  const session = new ResilientLobbySession({ apiBase: "http://example.test" });
+  await session.host();
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.message({ type: "connected", hostParticipantId: "11111111", participants: ["11111111", "22222222"] });
+  await flush();
+  const peer = FakePeerConnection.instances.at(-1);
+  peer.connectionState = "connected";
+  for (const channel of peer.channels) channel.readyState = "open";
+  socket.message({ type: "participant-disconnected", participantId: "22222222" });
+  socket.message({ type: "connected", hostParticipantId: "11111111", participants: ["11111111"] });
+  await flush();
+  assert.equal(peer.connectionState, "connected");
+  assert.deepEqual(session.readyPeerIds(), ["22222222"]);
+  assert.ok(session.participants.has("22222222"));
+  session.close();
+});
+
+test("TURN credential refresh reaches an existing peer on the next ICE recovery", async () => {
+  const oldTurn = { urls: "turn:example.test", username: "old", credential: "fixture-old" };
+  const newTurn = { ...oldTurn, username: "refreshed", credential: "fixture-new" };
+  const session = new ResilientLobbySession({ apiBase: "http://example.test", turnIceServers: [oldTurn] });
+  await session.host();
+  FakeWebSocket.instances.at(-1).message({ type: "connected", hostParticipantId: "11111111", participants: ["11111111", "22222222"] });
+  await flush();
+  const peer = FakePeerConnection.instances.at(-1);
+  peer.fail();
+  await flush();
+  peer.connectionState = "connected";
+  peer.dispatchEvent(new Event("connectionstatechange"));
+  session.setTurnIceServers([newTurn]);
+  peer.fail();
+  await flush();
+  assert.deepEqual(peer.configuration.iceServers, [newTurn]);
+  session.close();
+});
+
+test("demo sessions fetch private short-lived TURN configuration without enabling relay initially", async (t) => {
+  const { DemoLobbySession } = await import("../web/demo-session.ts");
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (String(url).endsWith("/turn-credentials")) return response({
+      iceServers: [{ urls: "turn:example.test", username: "ephemeral", credential: "test-only" }],
+      expiresAt: Date.now() + 120_000,
+    });
+    return response(lobbyResponse());
+  };
+  const session = new DemoLobbySession({ apiBase: "http://example.test" });
+  t.after(() => session.close());
+  await session.host(2);
+  assert.match(session.iceServers[0].urls, /^stun:/);
+  assert.equal(session.turnIceServers.length, 1);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].options.headers.authorization, `Bearer ${session.participantToken}`);
+  assert.ok(!calls[1].url.includes(session.participantToken));
+  FakeWebSocket.instances.at(-1).message({ type: "connected", hostParticipantId: "11111111", participants: ["11111111", "22222222"] });
+  await flush();
+  assert.deepEqual(FakePeerConnection.instances.at(-1).configuration.iceServers, session.iceServers);
+  session.close();
+  assert.deepEqual(session.turnIceServers, []);
+});
+
+test("demo remains usable when the service has no TURN configuration", async (t) => {
+  const { DemoLobbySession } = await import("../web/demo-session.ts");
+  globalThis.fetch = async (url) => String(url).endsWith("/turn-credentials")
+    ? { ok: false, status: 503, async json() { return { error: { code: "turn-not-configured", message: "TURN is not configured" } }; } }
+    : response(lobbyResponse());
+  const session = new DemoLobbySession({ apiBase: "http://example.test" });
+  t.after(() => session.close());
+  const errors = [];
+  session.addEventListener("error", (event) => errors.push(event.detail));
+  await session.host(2);
+  assert.equal(session.established, true);
+  assert.deepEqual(session.turnIceServers, []);
+  assert.deepEqual(errors, []);
+});
+
+test("ICE attempts that never report failure still reach bounded TURN recovery", async (t) => {
+  const session = new ResilientLobbySession({
+    apiBase: "http://example.test", iceConnectionTimeoutMs: 10, peerRecoveryAttempts: 1,
+    turnIceServers: [{ urls: "turn:example.test", username: "fixture", credential: "test-only" }],
+  });
+  t.after(() => session.close());
+  await session.host();
+  FakeWebSocket.instances.at(-1).message({ type: "connected", hostParticipantId: "11111111", participants: ["11111111", "22222222"] });
+  await flush(40);
+  const peer = FakePeerConnection.instances.at(-1);
+  assert.equal(peer.restartIceCount, 1);
+  assert.equal(peer.configuration.iceServers[0].urls, "turn:example.test");
+});
+
+test("an offline participant is removed when its preserved gameplay transport actually fails", async (t) => {
+  const session = new ResilientLobbySession({ apiBase: "http://example.test" });
+  t.after(() => session.close());
+  await session.host();
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.message({ type: "connected", hostParticipantId: "11111111", participants: ["11111111", "22222222"] });
+  await flush();
+  const peer = FakePeerConnection.instances.at(-1);
+  peer.connectionState = "connected";
+  for (const channel of peer.channels) channel.readyState = "open";
+  socket.message({ type: "participant-disconnected", participantId: "22222222" });
+  await flush();
+  assert.ok(session.participants.has("22222222"));
+  const departed = [];
+  session.addEventListener("participant-disconnected", (event) => departed.push(event.detail.participantId));
+  peer.fail();
+  await flush();
+  assert.equal(session.participants.has("22222222"), false);
+  assert.deepEqual(session.peerIds(), []);
+  assert.deepEqual(departed, ["22222222"]);
+});
+
+test("a remote restart request does not overlap an ICE recovery already awaiting connectivity", async (t) => {
+  const session = new ResilientLobbySession({ apiBase: "http://example.test" });
+  t.after(() => session.close());
+  await session.host();
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.message({ type: "connected", hostParticipantId: "11111111", participants: ["11111111", "22222222"] });
+  await flush();
+  const peer = FakePeerConnection.instances.at(-1);
+  peer.fail();
+  await flush();
+  socket.message({ type: "signal", from: "22222222", payload: { transport: { v: 1, type: "ice-restart-request" } } });
+  await flush();
+  assert.equal(peer.restartIceCount, 1);
+  assert.equal(peer.offerOptions.length, 2);
+});

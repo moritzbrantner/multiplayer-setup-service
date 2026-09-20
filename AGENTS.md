@@ -19,7 +19,7 @@
 ## TypeScript browser surface
 
 - Browser, browser-model test, and Playwright source is TypeScript only. Do not commit `.js` or `.mjs` under `web/`, `web-tests/`, or `e2e/`.
-- `bun --cwd web run build` is the canonical browser build. Generated JavaScript belongs only in ignored `dist/web/` or CI/Pages artifacts.
+- `bun run --cwd web build` is the canonical browser build. Generated JavaScript belongs only in ignored `dist/web/` or CI/Pages artifacts.
 - Preserve the existing module and authority boundaries during typing work; types describe the protocol rather than creating a second protocol authority.
 
 ## Change discipline

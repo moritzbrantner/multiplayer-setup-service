@@ -1,18 +1,23 @@
+import { TypedEventTarget } from "./events.ts";
+import type { ResilientLobbySession } from "./resilient-lobby-session.ts";
+export type CommandDetail = {peerId: string; command: string; payload: unknown};
+type CommandEvents = {command: CommandDetail; error: {peerId: string; command?: string; error: unknown}};
+type CommandHandler = (payload: unknown, detail: CommandDetail) => unknown;
 export const GAME_COMMAND_PROTOCOL = "multiplayer-game-command-v1";
 
 const MAX_COMMAND_NAME_LENGTH = 128;
 const COMMAND_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
-function isObject(value) {
+function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function requirePeerId(peerId) {
+function requirePeerId(peerId: unknown) {
   if (typeof peerId !== "string" || peerId === "") throw new Error("peerId must be a non-empty string");
   return peerId;
 }
 
-function requireCommandName(command) {
+function requireCommandName(command: unknown) {
   if (
     typeof command !== "string" ||
     command.length < 1 ||
@@ -24,7 +29,7 @@ function requireCommandName(command) {
   return command;
 }
 
-function commandEnvelope(command, payload) {
+function commandEnvelope(command: string, payload: unknown) {
   const envelope = { protocol: GAME_COMMAND_PROTOCOL, command: requireCommandName(command), payload };
   try {
     JSON.stringify(envelope);
@@ -34,7 +39,7 @@ function commandEnvelope(command, payload) {
   return envelope;
 }
 
-function parseCommandEnvelope(value) {
+function parseCommandEnvelope(value: unknown) {
   if (!isObject(value) || value.protocol !== GAME_COMMAND_PROTOCOL) return null;
   return {
     command: requireCommandName(value.command),
@@ -42,8 +47,12 @@ function parseCommandEnvelope(value) {
   };
 }
 
-export class GameCommands extends EventTarget {
-  constructor({ session } = {}) {
+export class GameCommands extends TypedEventTarget<CommandEvents> {
+  session: ResilientLobbySession;
+  handlers: Map<string, Set<CommandHandler>>;
+  closed: boolean;
+  onReliable: (event: CustomEvent<{peerId: string; data: unknown}>) => void;
+  constructor({ session }: {session: ResilientLobbySession}) {
     super();
     if (
       !session ||
@@ -62,12 +71,12 @@ export class GameCommands extends EventTarget {
     session.addEventListener("reliable", this.onReliable);
   }
 
-  send(peerId, command, payload = null) {
+  send(peerId: string, command: string, payload: unknown = null) {
     this.#assertOpen();
     this.session.sendReliable(requirePeerId(peerId), commandEnvelope(command, payload));
   }
 
-  sendToHost(command, payload = null) {
+  sendToHost(command: string, payload: unknown = null) {
     this.#assertOpen();
     const peerId = this.session.hostParticipantId;
     if (typeof peerId !== "string" || peerId === "") {
@@ -79,12 +88,12 @@ export class GameCommands extends EventTarget {
     this.send(peerId, command, payload);
   }
 
-  broadcast(command, payload = null, options = {}) {
+  broadcast(command: string, payload: unknown = null, options: {exclude?: string[]} = {}) {
     this.#assertOpen();
     this.session.broadcastReliable(commandEnvelope(command, payload), options);
   }
 
-  handle(command, handler) {
+  handle(command: string, handler: CommandHandler) {
     this.#assertOpen();
     const name = requireCommandName(command);
     if (typeof handler !== "function") throw new Error("command handler must be a function");
@@ -108,7 +117,7 @@ export class GameCommands extends EventTarget {
     this.handlers.clear();
   }
 
-  #receive(peerId, value) {
+  #receive(peerId: string, value: unknown) {
     if (this.closed || typeof peerId !== "string" || peerId === "") return;
 
     let envelope;
@@ -140,7 +149,7 @@ export class GameCommands extends EventTarget {
     if (this.closed) throw new Error("GameCommands is closed");
   }
 
-  #emit(type, detail) {
+  #emit<K extends keyof CommandEvents>(type: K, detail: CommandEvents[K]) {
     this.dispatchEvent(new CustomEvent(type, { detail }));
   }
 }

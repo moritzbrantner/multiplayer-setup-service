@@ -1,6 +1,6 @@
 # Multi-participant lobbies
 
-`/rooms` remains the compact two-player API used by the original Tic-Tac-Toe and Pong demos.
+`/rooms` remains the legacy compact two-player API exposed by `PeerSession`. All demos now use `/lobbies` through `DemoLobbySession`; Tic-Tac-Toe and Pong use its two-player adapter so they also retain signaling recovery and TURN fallback.
 
 `/lobbies` is the additive multi-participant API. It supports 2–16 authenticated participants and targeted WebRTC signaling without choosing a gameplay topology for the client.
 
