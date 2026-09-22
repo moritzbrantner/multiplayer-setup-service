@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test ../web-tests/*.test.mjs",
-    "test:perf": "node --test ../web-tests/*.perf.mjs",
+    "build": "rm -f ./*.js ./*.mjs && bun build ./*.ts --outdir . --target browser --format esm",
+    "test": "bun run build && bun test ../web-tests/*.test.ts",
+    "test:perf": "bun test ../web-tests/*.perf.ts",
     "check": "bun run test && bun run test:perf"
   }
 }
