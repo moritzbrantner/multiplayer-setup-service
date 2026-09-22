@@ -2,6 +2,10 @@
   "name": "multiplayer-setup-browser-acceptance",
   "private": true,
   "type": "module",
-  "scripts": { "test": "playwright test" },
-  "devDependencies": { "@playwright/test": "1.63.0" }
+  "scripts": {
+    "test": "bun --cwd ../web run build && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
 }
