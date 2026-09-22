@@ -30,7 +30,7 @@ jobs:
           bun-version: 1.4.0
 
       - name: Build browser TypeScript
-        run: bun --cwd web run build
+        run: (cd web && bun run build)
 
       - name: Check Pages asset graph
         run: |
@@ -100,7 +100,7 @@ jobs:
           bun-version: 1.4.0
 
       - name: Build browser TypeScript
-        run: bun --cwd web run build
+        run: (cd web && bun run build)
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
