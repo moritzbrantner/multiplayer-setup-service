@@ -37,7 +37,7 @@ jobs:
             exit 1
           fi
       - name: Build and test browser TypeScript
-        run: bun --cwd web run check
+        run: (cd web && bun run check)
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint
