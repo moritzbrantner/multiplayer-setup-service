@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 export default defineConfig({
   testDir: ".",
-  testMatch: "*.spec.mjs",
+  testMatch: "*.spec.ts",
   timeout: 60_000,
   expect: { timeout: 20_000 },
   retries: 0,
