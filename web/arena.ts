@@ -8,7 +8,7 @@ import {
   isTopologyReady,
   topologyEdgeCount,
   validStep,
-} from "./arena-model.mjs";
+} from "./arena-model.js";
 
 const params = new URLSearchParams(window.location.search);
 const apiBase = params.get("api") || "http://127.0.0.1:8787";
