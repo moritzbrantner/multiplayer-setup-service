@@ -8,7 +8,7 @@ import {
   createCardGame,
   shuffleCardDeck,
   validCardIntent,
-} from "../web/card-game-model.mjs";
+} from "../web/card-game-model.js";
 
 test("card deck has stable unique identities", () => {
   const deck = createCardDeck();

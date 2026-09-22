@@ -17,6 +17,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+(cd web && bun run build)
+
 BIND_ADDR="$signaling_bind_addr" cargo run --locked &
 service_pid=$!
 

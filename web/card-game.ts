@@ -6,7 +6,7 @@ import {
   canPlayCard,
   cardViewFor,
   createCardGame,
-} from "./card-game-model.mjs";
+} from "./card-game-model.js";
 
 const CARD_INTENT_COMMAND = "card.intent";
 const params = new URLSearchParams(window.location.search);

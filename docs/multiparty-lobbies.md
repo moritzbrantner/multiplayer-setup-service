@@ -71,7 +71,7 @@ The host is a transport hub in this topology, not automatically an authoritative
 
 ## Browser foundation
 
-`web/lobby-session.js` provides `LobbySession` with `mesh` and `host` topologies. It creates one `RTCPeerConnection` per required topology edge and gives each edge a reliable ordered channel plus an unordered `maxRetransmits: 0` realtime channel.
+`web/lobby-session.ts` provides `LobbySession` with `mesh` and `host` topologies. It creates one `RTCPeerConnection` per required topology edge and gives each edge a reliable ordered channel plus an unordered `maxRetransmits: 0` realtime channel.
 
 The signaling WebSocket stays open during the lobby lifetime because later participants may need new WebRTC setup exchanges.
 

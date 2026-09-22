@@ -167,7 +167,7 @@ Do not expose port `8787` publicly; expose only the TLS/HTTP ports needed by Cad
 
 The browser owns `RTCPeerConnection`, game topology, and gameplay semantics. The setup API provides rendezvous/signaling and optional temporary TURN credentials.
 
-For restrictive networks, an authenticated lobby session can fetch and install short-lived TURN configuration with `web/turn-credentials.js`; `ResilientLobbySession` remains direct-first and uses TURN during recovery rather than forcing every peer through a relay.
+For restrictive networks, an authenticated lobby session can fetch and install short-lived TURN configuration with `web/turn-credentials.ts`; `ResilientLobbySession` remains direct-first and uses TURN during recovery rather than forcing every peer through a relay.
 
 Optional bulk asset sharing remains separately opt-in. `ContentPeerPool` denies positively identified TURN-relayed bulk sends by default; a game must explicitly choose an allow or byte-rate-limited relay policy.
 

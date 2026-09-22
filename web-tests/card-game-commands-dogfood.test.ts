@@ -11,10 +11,10 @@ if (typeof globalThis.CustomEvent === "undefined") {
   };
 }
 
-import { applyCardIntent, createCardGame } from "../web/card-game-model.mjs";
+import { applyCardIntent, createCardGame } from "../web/card-game-model.js";
 import { GAME_COMMAND_PROTOCOL, GameCommands } from "../web/game-commands.js";
 
-const client = await readFile(new URL("../web/card-game.js", import.meta.url), "utf8");
+const client = await readFile(new URL("../web/card-game.ts", import.meta.url), "utf8");
 
 class LinkedSession extends EventTarget {
   constructor(participantId, hostParticipantId) {
