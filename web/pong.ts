@@ -1,5 +1,5 @@
 import { LobbyExperience, readInviteJoin } from "./lobby-experience.js";
-import { movePaddleToward, mayAcceptPongScore } from "./pong-model.mjs";
+import { movePaddleToward, mayAcceptPongScore } from "./pong-model.js";
 import { PeerSession } from "./session.js";
 
 const WIDTH = 800;
