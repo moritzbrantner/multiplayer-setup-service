@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mayAcceptPongScore, movePaddleToward, validPongScoreMessage } from "../web/pong-model.mjs";
+import { mayAcceptPongScore, movePaddleToward, validPongScoreMessage } from "../web/pong-model.js";
 
 test("guest paddle movement is speed-limited on the authoritative host", () => {
   assert.equal(movePaddleToward(100, 400, 0.1, 330, 46, 404), 133);
