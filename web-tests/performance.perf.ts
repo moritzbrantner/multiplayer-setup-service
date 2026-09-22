@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { test } from "node:test";
 
-import { applyStepToState, topologyEdgeCount } from "../web/arena-model.mjs";
+import { applyStepToState, topologyEdgeCount } from "../web/arena-model.js";
 
 if (typeof globalThis.CustomEvent === "undefined") {
   globalThis.CustomEvent = class CustomEvent extends Event {
