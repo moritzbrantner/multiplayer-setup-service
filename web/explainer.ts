@@ -1,4 +1,4 @@
-import { topologyEdgeCount } from "./arena-model.mjs";
+import { topologyEdgeCount } from "./arena-model.js";
 
 const phaseCopy = {
   create: {
