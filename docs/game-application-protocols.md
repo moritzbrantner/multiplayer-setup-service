@@ -70,4 +70,4 @@ Use `GameCommands` for state-changing application intent and `GameFiles` for man
 
 ## Validation
 
-`web-tests/game-protocols.test.mjs` covers command routing and handler failures, protocol isolation, verified end-to-end file requests, explicit rejection, timeouts, request correlation, trusted-manifest rejection, and the one-active-transfer-per-peer bound. Existing content-transfer tests continue to cover chunk hashes, whole-file verification, corrupted transfers, and opt-in content sharing.
+`web-tests/game-protocols.test.ts` covers command routing and handler failures, protocol isolation, verified end-to-end file requests, explicit rejection, timeouts, request correlation, trusted-manifest rejection, and the one-active-transfer-per-peer bound. Existing content-transfer tests continue to cover chunk hashes, whole-file verification, corrupted transfers, and opt-in content sharing.
