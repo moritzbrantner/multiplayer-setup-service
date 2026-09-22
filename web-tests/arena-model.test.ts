@@ -8,7 +8,7 @@ import {
   isTopologyReady,
   topologyEdgeCount,
   validStep,
-} from "../web/arena-model.mjs";
+} from "../web/arena-model.js";
 
 test("hashId and initialPlayer are deterministic", () => {
   const id = "1234ABCD";
