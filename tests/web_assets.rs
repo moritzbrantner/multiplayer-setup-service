@@ -12,7 +12,7 @@ fn web_file(name: &str) -> String {
 
 #[test]
 fn peer_session_exposes_reliable_and_realtime_channels() {
-    let source = web_file("session.js");
+    let source = web_file("session.ts");
     assert!(source.contains("createDataChannel(\"reliable\""));
     assert!(source.contains("createDataChannel(\"realtime\""));
     assert!(source.contains("maxRetransmits: 0"));
@@ -21,11 +21,11 @@ fn peer_session_exposes_reliable_and_realtime_channels() {
 
 #[test]
 fn lobby_session_supports_mesh_and_host_topologies() {
-    let entrypoint = web_file("lobby-session.js");
+    let entrypoint = web_file("lobby-session.ts");
     assert!(entrypoint.contains("ResilientLobbySession as LobbySession"));
     assert!(entrypoint.contains("./resilient-lobby-session.js"));
 
-    let source = web_file("resilient-lobby-session.js");
+    let source = web_file("resilient-lobby-session.ts");
     assert!(source.contains("topology === \"mesh\""));
     assert!(source.contains("topology === \"host\""));
     assert!(source.contains("createDataChannel(\"reliable\""));
@@ -38,8 +38,8 @@ fn lobby_session_supports_mesh_and_host_topologies() {
 
 #[test]
 fn games_share_the_peer_session_transport() {
-    let tic_tac_toe = web_file("tic-tac-toe.js");
-    let pong = web_file("pong.js");
+    let tic_tac_toe = web_file("tic-tac-toe.ts");
+    let pong = web_file("pong.ts");
 
     assert!(tic_tac_toe.contains("./session.js"));
     assert!(tic_tac_toe.contains("sendReliable"));
@@ -50,13 +50,13 @@ fn games_share_the_peer_session_transport() {
 
 #[test]
 fn demo_lobbies_share_invites_chat_and_latency_telemetry() {
-    let experience = web_file("lobby-experience.js");
+    let experience = web_file("lobby-experience.ts");
     assert!(experience.contains("multiplayer-lobby-chat-v1"));
     assert!(experience.contains("multiplayer-lobby-ping-v1"));
     assert!(experience.contains("navigator.share"));
     assert!(experience.contains("searchParams.set(\"join\", \"1\")"));
 
-    for script in ["pong.js", "tic-tac-toe.js", "card-game.js", "arena.js"] {
+    for script in ["pong.ts", "tic-tac-toe.ts", "card-game.ts", "arena.ts"] {
         assert!(web_file(script).contains("./lobby-experience.js"));
     }
     for page in [
@@ -75,11 +75,11 @@ fn demo_lobbies_share_invites_chat_and_latency_telemetry() {
 
 #[test]
 fn input_arena_transmits_commands_and_delegates_deterministic_calculation() {
-    let arena = web_file("arena.js");
-    let model = web_file("arena-model.mjs");
+    let arena = web_file("arena.ts");
+    let model = web_file("arena-model.ts");
 
     assert!(arena.contains("./lobby-session.js"));
-    assert!(arena.contains("./arena-model.mjs"));
+    assert!(arena.contains("./arena-model.js"));
     assert!(arena.contains("type: \"step\""));
     assert!(arena.contains("broadcastReliable"));
     assert!(arena.contains("applyStepToState"));
@@ -94,7 +94,7 @@ fn input_arena_transmits_commands_and_delegates_deterministic_calculation() {
 #[test]
 fn pages_explainer_documents_the_actual_multiplayer_boundary() {
     let index = web_file("index.html");
-    let explainer = web_file("explainer.js");
+    let explainer = web_file("explainer.ts");
 
     assert!(index.contains("id=\"mechanism\""));
     assert!(index.contains("id=\"ownership\""));
@@ -111,7 +111,7 @@ fn pages_explainer_documents_the_actual_multiplayer_boundary() {
     assert!(index.contains("./explainer.js"));
 
     assert!(explainer.contains("TURN may relay"));
-    assert!(explainer.contains("import { topologyEdgeCount } from \"./arena-model.mjs\""));
+    assert!(explainer.contains("import { topologyEdgeCount } from \"./arena-model.js\""));
     assert!(explainer.contains("topologyEdgeCount(topology, count)"));
     assert!(explainer.contains("localStorage.setItem(\"multiplayer-setup-endpoint\""));
     assert!(explainer.contains("url.searchParams.set(\"api\", endpoint)"));
@@ -120,7 +120,7 @@ fn pages_explainer_documents_the_actual_multiplayer_boundary() {
 #[test]
 fn pages_client_code_components_show_supported_browser_apis() {
     let index = web_file("index.html");
-    let components = web_file("client-code-components.js");
+    let components = web_file("client-code-components.ts");
     let styles = web_file("client-code-components.css");
 
     assert!(index.contains("id=\"client-code\""));
