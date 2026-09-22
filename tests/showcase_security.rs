@@ -9,8 +9,8 @@ fn repo_file(path: &str) -> String {
 #[test]
 fn card_showcase_uses_host_validated_intents_and_hidden_views() {
     let html = repo_file("web/card-game.html");
-    let client = repo_file("web/card-game.js");
-    let model = repo_file("web/card-game-model.mjs");
+    let client = repo_file("web/card-game.ts");
+    let model = repo_file("web/card-game-model.ts");
 
     assert!(html.contains("Four-player color-match card game"));
     assert!(html.contains("Send forged card ID"));
@@ -34,8 +34,8 @@ fn card_showcase_uses_host_validated_intents_and_hidden_views() {
 #[test]
 fn pong_showcase_keeps_score_and_paddle_speed_host_authoritative() {
     let html = repo_file("web/pong.html");
-    let client = repo_file("web/pong.js");
-    let model = repo_file("web/pong-model.mjs");
+    let client = repo_file("web/pong.ts");
+    let model = repo_file("web/pong-model.ts");
 
     assert!(html.contains("attempt forged 99–0 score"));
     assert!(client.contains("movePaddleToward"));
