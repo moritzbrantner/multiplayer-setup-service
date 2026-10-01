@@ -85,6 +85,7 @@ class FakeWebSocket extends EventTarget {
   static OPEN = 1;
   static CLOSED = 3;
   static instances = [];
+  static autoOpen = true;
 
   constructor(url, protocols) {
     super();
@@ -94,6 +95,7 @@ class FakeWebSocket extends EventTarget {
     this.sent = [];
     FakeWebSocket.instances.push(this);
     queueMicrotask(() => {
+      if (!FakeWebSocket.autoOpen || this.readyState === FakeWebSocket.CLOSED) return;
       this.readyState = FakeWebSocket.OPEN;
       this.dispatchEvent(new Event("open"));
     });
@@ -146,6 +148,7 @@ async function flush(ms = 0) {
 beforeEach(() => {
   FakePeerConnection.instances = [];
   FakeWebSocket.instances = [];
+  FakeWebSocket.autoOpen = true;
   globalThis.fetch = async () => response(lobbyResponse());
 });
 
@@ -221,4 +224,51 @@ test("failed direct peer escalates to TURN and sends an ICE-restart offer", asyn
   );
   assert.ok(recoveryOffer);
   session.close();
+});
+
+test("initial setup expires even when the HTTP request never settles", async () => {
+  globalThis.fetch = () => new Promise(() => {});
+  const session = new ResilientLobbySession({ apiBase: "https://setup.example", setupTimeoutMs: 10 });
+  try {
+    const result = await Promise.race([
+      session.host().then(() => "resolved", (error) => error.message),
+      new Promise((resolve) => setTimeout(() => resolve("still pending"), 100)),
+    ]);
+    assert.equal(result, "Lobby session setup timed out");
+    assert.equal(session.lobbyId, null);
+    assert.equal(session.signaling, null);
+  } finally {
+    session.close();
+  }
+});
+
+test("closing cancels initial setup and aborts its HTTP request", async () => {
+  let signal;
+  globalThis.fetch = (_url, options) => {
+    signal = options.signal;
+    return new Promise(() => {});
+  };
+  const session = new ResilientLobbySession({ apiBase: "https://setup.example" });
+  const pending = session.join("ABCDEF").then(() => "resolved", (error) => error.message);
+  session.close();
+  const result = await Promise.race([
+    pending,
+    new Promise((resolve) => setTimeout(() => resolve("still pending"), 100)),
+  ]);
+  assert.equal(result, "Lobby session setup was cancelled");
+  assert.equal(signal.aborted, true);
+});
+
+
+test("the setup deadline also closes stalled signaling", async () => {
+  FakeWebSocket.autoOpen = false;
+  const session = new ResilientLobbySession({ apiBase: "https://setup.example", setupTimeoutMs: 10 });
+  try {
+    await assert.rejects(session.host(), /setup timed out/);
+    assert.equal(FakeWebSocket.instances[0].readyState, FakeWebSocket.CLOSED);
+    assert.equal(session.participantToken, null);
+    assert.equal(session.signaling, null);
+  } finally {
+    session.close();
+  }
 });

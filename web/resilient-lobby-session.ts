@@ -111,12 +111,15 @@ export class ResilientLobbySession extends EventTarget {
     reconnectBaseDelayMs = DEFAULT_RECONNECT_BASE_DELAY_MS,
     reconnectMaxDelayMs = DEFAULT_RECONNECT_MAX_DELAY_MS,
     peerRecoveryAttempts = DEFAULT_PEER_RECOVERY_ATTEMPTS,
+    setupTimeoutMs = 10_000,
   } = {}) {
     super();
     if (!validTopology(topology)) throw new Error("Topology must be 'mesh' or 'host'");
     if (typeof contentSharing !== "boolean") throw new Error("contentSharing must be a boolean");
     validateReconnectOptions(reconnectMaxAttempts, reconnectBaseDelayMs, reconnectMaxDelayMs);
     validatePositiveInteger(peerRecoveryAttempts, "peerRecoveryAttempts");
+    validatePositiveInteger(setupTimeoutMs, "setupTimeoutMs");
+    if (setupTimeoutMs > 2_147_483_647) throw new Error("setupTimeoutMs exceeds the timer range");
     if (!Array.isArray(iceServers) || !Array.isArray(turnIceServers)) {
       throw new Error("iceServers and turnIceServers must be arrays");
     }
@@ -130,6 +133,8 @@ export class ResilientLobbySession extends EventTarget {
     this.reconnectBaseDelayMs = reconnectBaseDelayMs;
     this.reconnectMaxDelayMs = reconnectMaxDelayMs;
     this.peerRecoveryAttempts = peerRecoveryAttempts;
+    this.setupTimeoutMs = setupTimeoutMs;
+    this.setupAbort = null;
     this.lobbyId = null;
     this.displayCode = null;
     this.participantId = null;
@@ -167,10 +172,11 @@ export class ResilientLobbySession extends EventTarget {
     if (!Number.isInteger(maxParticipants) || maxParticipants < 2 || maxParticipants > 16) {
       throw new Error("Lobby size must be between 2 and 16");
     }
-    return this.#runInitialSetup(() =>
+    return this.#runInitialSetup((signal) =>
       readJson(
         fetch(new URL("/lobbies", this.apiBase), {
           method: "POST",
+          signal,
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ maxParticipants }),
         }),
@@ -182,28 +188,46 @@ export class ResilientLobbySession extends EventTarget {
     const normalized = String(lobbyCode ?? "").trim();
     if (!normalized) throw new Error("Enter a lobby code");
     const path = `/lobbies/${encodeURIComponent(normalized)}/join`;
-    return this.#runInitialSetup(() => readJson(fetch(new URL(path, this.apiBase), { method: "POST" })));
+    return this.#runInitialSetup((signal) => readJson(fetch(new URL(path, this.apiBase), { method: "POST", signal })));
   }
 
   async #runInitialSetup(loadLobby) {
     const generation = this.#beginInitialSetup();
+    const controller = new AbortController();
+    this.setupAbort = controller;
+    const timeout = setTimeout(() => {
+      controller.abort(new Error("Lobby session setup timed out"));
+    }, this.setupTimeoutMs);
+    let onAbort;
+    const aborted = new Promise((_, reject) => {
+      onAbort = () => reject(controller.signal.reason);
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+    });
     try {
-      const lobby = await loadLobby();
-      this.#assertInitialSetupActive(generation);
-      this.#adoptLobby(lobby);
-      await this.#connectSignaling(lobby.websocketPath);
-      this.#assertInitialSetupActive(generation);
-      if (this.signaling?.readyState !== WebSocket.OPEN) {
-        throw new Error("Lobby signaling closed during initial setup");
-      }
-      this.setupInFlight = false;
-      this.established = true;
-      this.#emit("lobby", this.#lobbyDetail());
-      return lobby;
+      return await Promise.race([aborted, this.#completeInitialSetup(generation, loadLobby, controller.signal)]);
     } catch (error) {
       this.#abortInitialSetup(generation);
       throw error;
+    } finally {
+      clearTimeout(timeout);
+      controller.signal.removeEventListener("abort", onAbort);
+      if (this.setupAbort === controller) this.setupAbort = null;
     }
+  }
+
+  async #completeInitialSetup(generation, loadLobby, signal) {
+    const lobby = await loadLobby(signal);
+    this.#assertInitialSetupActive(generation);
+    this.#adoptLobby(lobby);
+    await this.#connectSignaling(lobby.websocketPath);
+    this.#assertInitialSetupActive(generation);
+    if (this.signaling?.readyState !== WebSocket.OPEN) {
+      throw new Error("Lobby signaling closed during initial setup");
+    }
+    this.setupInFlight = false;
+    this.established = true;
+    this.#emit("lobby", this.#lobbyDetail());
+    return lobby;
   }
 
   #beginInitialSetup() {
@@ -324,6 +348,7 @@ export class ResilientLobbySession extends EventTarget {
 
   close() {
     const cancelingInitialSetup = this.setupInFlight && !this.established;
+    this.setupAbort?.abort(new Error("Lobby session setup was cancelled"));
     this.setupGeneration += 1;
     this.setupInFlight = false;
     this.established = false;
