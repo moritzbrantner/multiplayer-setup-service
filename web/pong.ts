@@ -9,6 +9,8 @@ const PADDLE_H = 92;
 const BALL_R = 9;
 const PADDLE_SPEED = 330;
 const SNAPSHOT_INTERVAL = 1 / 30;
+const SIMULATION_STEP = 1 / 120;
+const MAX_STEPS_PER_TICK = 1200;
 
 const params = new URLSearchParams(location.search);
 const apiBase = params.get("api") ?? "http://127.0.0.1:8787";
@@ -34,6 +36,7 @@ let session = null;
 let lobbyExperience = null;
 let ready = false;
 let previousTime = performance.now();
+let simulationDebt = 0;
 let snapshotBudget = 0;
 let localDirection = 0;
 let targetGuestY = HEIGHT / 2;
@@ -178,10 +181,27 @@ function draw() {
   ctx.fill();
 }
 
-function frame(now) {
-  const dt = Math.min(0.05, Math.max(0, (now - previousTime) / 1000));
+function simulationTick() {
+  const now = performance.now();
+  const elapsed = Math.max(0, (now - previousTime) / 1000);
   previousTime = now;
-  if (ready && session?.role === "host") updateHost(dt);
+  if (!ready || session?.role !== "host") {
+    simulationDebt = 0;
+    return;
+  }
+
+  // Rendering is suspended in hidden tabs. Keep the simulation on a separate
+  // clock and replay elapsed time in fixed steps after throttled timer wakeups.
+  simulationDebt += elapsed;
+  let steps = 0;
+  while (simulationDebt >= SIMULATION_STEP && steps < MAX_STEPS_PER_TICK) {
+    updateHost(SIMULATION_STEP);
+    simulationDebt -= SIMULATION_STEP;
+    steps += 1;
+  }
+}
+
+function frame() {
   if (ready && session?.role === "guest") interpolateGuest();
   draw();
   requestAnimationFrame(frame);
@@ -220,6 +240,8 @@ function attachSession(next) {
   });
   session.addEventListener("p2p-ready", () => {
     ready = true;
+    previousTime = performance.now();
+    simulationDebt = 0;
     status.textContent = "Peer-to-peer ready; signaling released.";
     controlHint.textContent = session.role === "host"
       ? "You are the left paddle. Use W/S or drag/tap on the field."
@@ -324,5 +346,6 @@ window.addEventListener("beforeunload", () => {
   lobbyExperience?.close();
   session?.close();
 });
+setInterval(simulationTick, 1000 / 60);
 requestAnimationFrame(frame);
 if (inviteJoin.autoJoin) queueMicrotask(() => connect("join"));
