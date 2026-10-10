@@ -45,7 +45,8 @@ async function openPong(browser, project) {
     const priorRoom = reload ? null : await host.locator("#code").textContent();
     if (reload) await host.goto("/pong.html?api=http%3A%2F%2F127.0.0.1%3A8787");
     await host.getByRole("button", { name: "Host game" }).click();
-    await expect.poll(() => host.locator("#code").textContent()).not.toBe(priorRoom);
+    await expect(host.locator("#code")).not.toBeEmpty();
+    if (priorRoom !== null) await expect.poll(() => host.locator("#code").textContent()).not.toBe(priorRoom);
     return (await host.locator("#code").textContent()).trim();
   };
   const joinRoom = async code => {
