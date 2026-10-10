@@ -34,7 +34,8 @@ jobs:
       - name: Install locked browser harness and Chromium
         run: |
           bun install --frozen-lockfile --ignore-scripts
-          bunx playwright install --with-deps chromium
+          # Use the exact @playwright/test workspace version, not bunx's latest CLI.
+          (cd e2e && bun run playwright install --with-deps chromium)
       - name: Install loopback-only TURN fixture
         run: |
           sudo apt-get update
