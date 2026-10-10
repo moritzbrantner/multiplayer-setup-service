@@ -23,7 +23,8 @@ export class PongHostClock {
     let applied = 0;
     while (this.simulatedThrough + this.stepMs <= nowMs && steps < this.maxStepsPerTick) {
       const nextStepAt = this.simulatedThrough + this.stepMs;
-      while (applied < this.transitions.length && this.transitions[applied].atMs <= nextStepAt) {
+      // A transition belongs to the first step that *starts* after receipt.
+      while (applied < this.transitions.length && this.transitions[applied].atMs <= this.simulatedThrough) {
         this.transitions[applied].apply();
         applied += 1;
       }

@@ -38,7 +38,7 @@ test("multiple input transitions apply at host receipt times, never during earli
   for (let i = 0; i < 4; i += 1) clock.advance(140, (_, at) => observed.push([at, target]));
   assert.deepEqual(observed.filter(([at]) => at <= 90).map(([, value]) => value), Array(9).fill(225));
   assert.deepEqual(observed.filter(([at]) => [100, 110, 120, 130, 140].includes(at)), [
-    [100, 380], [110, 80], [120, 80], [130, 300], [140, 300],
+    [100, 225], [110, 380], [120, 80], [130, 80], [140, 300],
   ]);
 });
 
