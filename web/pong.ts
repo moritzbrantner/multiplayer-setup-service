@@ -1,6 +1,7 @@
 import { LobbyExperience, readInviteJoin } from "./lobby-experience.js";
 import { movePaddleToward, mayAcceptPongScore } from "./pong-model.js";
 import { PeerSession } from "./session.js";
+import { PongHostClock } from "./pong-clock.js";
 
 const WIDTH = 800;
 const HEIGHT = 450;
@@ -8,7 +9,8 @@ const PADDLE_W = 14;
 const PADDLE_H = 92;
 const BALL_R = 9;
 const PADDLE_SPEED = 330;
-const SNAPSHOT_INTERVAL = 1 / 30;
+const SNAPSHOT_INTERVAL_MS = 1000 / 30;
+const MAX_BUFFERED_GAMEPLAY_BYTES = 16 * 1024;
 
 const params = new URLSearchParams(location.search);
 const apiBase = params.get("api") ?? "http://127.0.0.1:8787";
@@ -33,8 +35,9 @@ if (inviteJoin.code) roomInput.value = inviteJoin.code;
 let session = null;
 let lobbyExperience = null;
 let ready = false;
-let previousTime = performance.now();
-let snapshotBudget = 0;
+const hostClock = new PongHostClock();
+let lastSnapshotAt = -Infinity;
+let pendingScore = false;
 let localDirection = 0;
 let targetGuestY = HEIGHT / 2;
 let guestView = null;
@@ -82,11 +85,8 @@ function score(side) {
   if (side === "host") world.hostScore += 1;
   else world.guestScore += 1;
   updateScoreUi(world.hostScore, world.guestScore);
-  session.sendReliable({
-    kind: "pong-score",
-    hostScore: world.hostScore,
-    guestScore: world.guestScore,
-  });
+  // Historical scores are coalesced into one reliable update after catch-up.
+  pendingScore = true;
   resetBall(side === "host" ? 1 : -1);
 }
 
@@ -139,11 +139,6 @@ function updateHost(dt) {
   if (world.ballX < -30) score("guest");
   else if (world.ballX > WIDTH + 30) score("host");
 
-  snapshotBudget += dt;
-  if (snapshotBudget >= SNAPSHOT_INTERVAL) {
-    snapshotBudget %= SNAPSHOT_INTERVAL;
-    session.sendRealtime(snapshot());
-  }
 }
 
 function interpolateGuest() {
@@ -178,10 +173,42 @@ function draw() {
   ctx.fill();
 }
 
-function frame(now) {
-  const dt = Math.min(0.05, Math.max(0, (now - previousTime) / 1000));
-  previousTime = now;
-  if (ready && session?.role === "host") updateHost(dt);
+function canSendGameplay(channel) {
+  return channel?.readyState === "open" && channel.bufferedAmount < MAX_BUFFERED_GAMEPLAY_BYTES;
+}
+
+function simulationTick() {
+  if (!ready || session?.role !== "host") return;
+  const now = performance.now();
+  const { caughtUp } = hostClock.advance(now, updateHost);
+
+  // No historical network packets: publish at most one *current* snapshot
+  // per 30 Hz window once the bounded replay has reached the present.
+  if (!caughtUp) return;
+  if (pendingScore && canSendGameplay(session.reliable)) {
+    try {
+      session.sendReliable({
+        kind: "pong-score",
+        hostScore: world.hostScore,
+        guestScore: world.guestScore,
+      });
+      pendingScore = false;
+    } catch {
+      // An RTCDataChannel can close or reject send despite a readiness check.
+      // Keep the final score pending until a later, writable tick.
+    }
+  }
+  if (now - lastSnapshotAt >= SNAPSHOT_INTERVAL_MS && canSendGameplay(session.realtime)) {
+    try {
+      session.sendRealtime(snapshot());
+      lastSnapshotAt = now;
+    } catch {
+      // Do not backlog or replay stale snapshots when RTC backpressure clears.
+    }
+  }
+}
+
+function frame() {
   if (ready && session?.role === "guest") interpolateGuest();
   draw();
   requestAnimationFrame(frame);
@@ -198,8 +225,22 @@ function setLocalPaddleFromPointer(event) {
   if (!ready || !session) return;
   const rect = canvas.getBoundingClientRect();
   const y = ((event.clientY - rect.top) / rect.height) * HEIGHT;
-  if (session.role === "host") world.leftY = clampPaddle(y);
-  else sendGuestPaddle(y);
+  if (session.role === "host") {
+    const position = clampPaddle(y);
+    hostClock.queueInput(performance.now(), () => { world.leftY = position; });
+  } else sendGuestPaddle(y);
+}
+
+function connectionLost() {
+  if (!ready) return;
+  ready = false;
+  hostClock.reset(performance.now());
+  pendingScore = false;
+  guestView = null;
+  hostButton.disabled = false;
+  joinButton.disabled = false;
+  roomInput.disabled = false;
+  status.textContent = "Peer connection ended. Host or join a new room.";
 }
 
 function attachSession(next) {
@@ -216,9 +257,18 @@ function attachSession(next) {
     codeRow.classList.remove("hidden");
   });
   session.addEventListener("statechange", (event) => {
+    if (session !== next) return;
     status.textContent = `Connection: ${event.detail.state}`;
+    if (event.detail.state === "closed" || event.detail.state === "failed") connectionLost();
+  });
+  session.addEventListener("channel-close", () => {
+    if (session === next) connectionLost();
   });
   session.addEventListener("p2p-ready", () => {
+    if (session !== next) return;
+    hostClock.reset(performance.now());
+    lastSnapshotAt = -Infinity;
+    pendingScore = false;
     ready = true;
     status.textContent = "Peer-to-peer ready; signaling released.";
     controlHint.textContent = session.role === "host"
@@ -233,7 +283,9 @@ function attachSession(next) {
   session.addEventListener("realtime", (event) => {
     const message = event.detail;
     if (session.role === "host" && message?.kind === "pong-paddle" && Number.isFinite(message.y)) {
-      targetGuestY = clampPaddle(message.y);
+      const position = clampPaddle(message.y);
+      // Timestamp on host receipt, never using an untrusted guest clock.
+      hostClock.queueInput(performance.now(), () => { targetGuestY = position; });
     } else if (session.role === "guest" && message?.kind === "pong-snapshot") {
       guestView = message;
     }
@@ -269,8 +321,21 @@ async function connect(mode) {
   joinButton.disabled = true;
   roomInput.disabled = true;
   ready = false;
+  hostClock.reset(performance.now());
+  pendingScore = false;
+  localDirection = 0;
+  targetGuestY = HEIGHT / 2;
+  guestView = null;
+  Object.assign(world, {
+    leftY: HEIGHT / 2, rightY: HEIGHT / 2,
+    ballX: WIDTH / 2, ballY: HEIGHT / 2,
+    ballVx: 260, ballVy: 120, hostScore: 0, guestScore: 0,
+  });
+  updateScoreUi(0, 0);
+  const previous = session;
   const next = new PeerSession({ apiBase });
   attachSession(next);
+  previous?.close();
   try {
     if (mode === "host") await next.host();
     else await next.join(roomInput.value);
@@ -308,13 +373,19 @@ canvas.addEventListener("pointermove", (event) => {
 });
 window.addEventListener("keydown", (event) => {
   if (!ready || !session) return;
-  if (session.role === "host" && (event.key === "w" || event.key === "W")) localDirection = -1;
-  if (session.role === "host" && (event.key === "s" || event.key === "S")) localDirection = 1;
+  if (session.role === "host" && (event.key === "w" || event.key === "W")) {
+    hostClock.queueInput(performance.now(), () => { localDirection = -1; });
+  }
+  if (session.role === "host" && (event.key === "s" || event.key === "S")) {
+    hostClock.queueInput(performance.now(), () => { localDirection = 1; });
+  }
   if (session.role === "guest" && event.key === "ArrowUp") sendGuestPaddle(world.rightY - 18);
   if (session.role === "guest" && event.key === "ArrowDown") sendGuestPaddle(world.rightY + 18);
 });
 window.addEventListener("keyup", (event) => {
-  if (session?.role === "host" && ["w", "W", "s", "S"].includes(event.key)) localDirection = 0;
+  if (ready && session?.role === "host" && ["w", "W", "s", "S"].includes(event.key)) {
+    hostClock.queueInput(performance.now(), () => { localDirection = 0; });
+  }
 });
 hostButton.addEventListener("click", () => connect("host"));
 joinButton.addEventListener("click", () => connect("join"));
@@ -324,5 +395,6 @@ window.addEventListener("beforeunload", () => {
   lobbyExperience?.close();
   session?.close();
 });
+setInterval(simulationTick, 1000 / 60);
 requestAnimationFrame(frame);
 if (inviteJoin.autoJoin) queueMicrotask(() => connect("join"));
