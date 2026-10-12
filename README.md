@@ -4,6 +4,14 @@ Small, provider-neutral rendezvous/signaling service for browser multiplayer gam
 
 The default deployment target is a basic Hetzner VPS. The service is a single Rust binary and keeps short-lived room/lobby state only in memory. Game rules, gameplay state, and peer-content bytes intentionally stay outside this repository's server authority.
 
+## Product direction: reusable multiplayer lobby
+
+Owner-approved steering decision (2026-10-12, question 1): **B — reusable multiplayer lobby**.
+
+Games should be able to reuse a common player-facing lobby experience: create a game, invite friends, view participants, indicate readiness, and start together. This experience is shared across games rather than independently reinvented for each title.
+
+The reusable lobby interface belongs in browser-side reusable components; this Rust service remains the short-lived rendezvous/control plane. This decision does **not** authorize accounts, public game discovery, matchmaking, shared gameplay authority, or server-side game rules. Detailed ready/start authority and semantics remain to be decided before implementing those behaviors.
+
 ## Ownership boundary
 
 The service owns connection setup and short-lived connectivity capabilities:
