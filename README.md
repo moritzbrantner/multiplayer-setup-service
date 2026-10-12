@@ -10,7 +10,9 @@ Owner-approved steering decision (2026-10-12, question 1): **B — reusable mult
 
 Games should be able to reuse a common player-facing lobby experience: create a game, invite friends, view participants, indicate readiness, and start together. This experience is shared across games rather than independently reinvented for each title.
 
-The reusable lobby interface belongs in browser-side reusable components; this Rust service remains the short-lived rendezvous/control plane. This decision does **not** authorize accounts, public game discovery, matchmaking, shared gameplay authority, or server-side game rules. Owner-approved steering decision (2026-10-12, question 2): **B — each player marks themselves ready; when all participants are ready, the host may manually start the game.** Readiness alone never automatically starts the game. The host retains start control; how readiness behaves when participants leave, join, or disconnect remains a separate choice.
+The reusable lobby interface belongs in browser-side reusable components; this Rust service remains the short-lived rendezvous/control plane. This decision does **not** authorize accounts, public game discovery, matchmaking, shared gameplay authority, or server-side game rules. Owner-approved steering decision (2026-10-12, question 2): **B — each player marks themselves ready; when all participants are ready, the host may manually start the game.** Readiness alone never automatically starts the game. The host retains start control.
+
+Owner-approved steering decision (2026-10-12, question 3): **B — temporarily reserve disconnected participants' lobby slots.** Show the affected participant as disconnected and preserve their place for reconnection during a bounded recovery window. While their slot is reserved and disconnected, the game cannot start, even if everyone else is ready. The precise recovery timeout and policy after it expires remain open choices; this decision does not establish permanent reservation or server-side gameplay authority.
 
 ## Ownership boundary
 
