@@ -22,6 +22,8 @@ Owner-approved steering decision (2026-10-13, question 12): **B — when a disco
 
 Owner-approved steering decision (2026-10-13, question 13): **A — if the lobby host explicitly leaves before the game starts, transfer lobby-host control immediately to the earliest-joined remaining connected participant.** Do not wait for the 120-second disconnection recovery timer or close the lobby merely because its host left. Because the host's departure changes membership, reset all remaining participants to not ready under question 11; the new host can Start only after everyone still present confirms readiness. This changes lobby control only, never game simulation authority. If no connected participants remain, the behavior is not settled by this decision.
 
+Owner-approved steering decision (2026-10-13, question 14): **B — each game decides whether new participants may join an already-started game.** A game that supports joining in progress may admit new participants after Start; a game that does not support it closes new-player admission at Start. The reusable lobby must respect the integrating game's admission policy rather than imposing a universal always-open or always-closed rule. This does not give the setup service authority over gameplay rules, state synchronization, or how a late entrant becomes playable; those stay game-owned. Pre-start readiness-reset rules do not restart a running game when its game-specific policy admits someone late.
+
 ## Ownership boundary
 
 The service owns connection setup and short-lived connectivity capabilities:
