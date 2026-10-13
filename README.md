@@ -20,6 +20,8 @@ Owner-approved steering decision (2026-10-13, question 11): **B — when a parti
 
 Owner-approved steering decision (2026-10-13, question 12): **B — when a disconnected participant reconnects to their existing reserved lobby slot, reset only that returning participant's ready status to not ready.** The returning player must explicitly mark themselves ready again before the host can start. Other participants keep their existing ready statuses; reconnection is not treated as a new join or a membership change. Starting remains blocked while the participant is disconnected. This applies whether reconnection occurs within 120 seconds or later while the host still retains the slot.
 
+Owner-approved steering decision (2026-10-13, question 13): **A — if the lobby host explicitly leaves before the game starts, transfer lobby-host control immediately to the earliest-joined remaining connected participant.** Do not wait for the 120-second disconnection recovery timer or close the lobby merely because its host left. Because the host's departure changes membership, reset all remaining participants to not ready under question 11; the new host can Start only after everyone still present confirms readiness. This changes lobby control only, never game simulation authority. If no connected participants remain, the behavior is not settled by this decision.
+
 ## Ownership boundary
 
 The service owns connection setup and short-lived connectivity capabilities:
