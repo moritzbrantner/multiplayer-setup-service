@@ -4,13 +4,16 @@ import { expect, test } from "@playwright/test";
 // popup deliberately implements only its public postMessage protocol. Actual
 // Rust Scrabble/WebTransport gameplay remains scrabble#80 acceptance.
 const pages = "https://moritzbrantner.github.io/scrabble/";
-const match = "b_000000006ac18f30_0123456789abcdef0123456789abcdef";
 const setupApi = "http://127.0.0.1:8787";
 const launcher = "/scrabble.html?setupApi=" + encodeURIComponent(setupApi);
 
 test.use({ trace: "off" }); // Host capabilities must not enter retained traces.
 
-test("host binds one public match, rejects forged messages, guests share the player route", async ({
+for (const [family, match] of [
+  ["legacy", "b_000000006ac18f30_0123456789abcdef0123456789abcdef"],
+  ["configured", "p_000000006ac18f30_0123456789abcdef0123456789abcdef"],
+]) {
+test(family + ": host binds one public match, rejects forged messages, guests share the player route", async ({
   browser,
 }, testInfo) => {
   const { viewport, isMobile = false, hasTouch = false } = testInfo.project.use;
@@ -87,6 +90,10 @@ test("host binds one public match, rejects forged messages, guests share the pla
     // The popup source is genuine, but the session does not match this lobby.
     await report(board, { ...message, session: "ZZZZZZZZZZZZ" });
     await report(board, { ...message, match: "https://untrusted.example/" });
+    await report(board, { ...message, match: "p_000000006ac18f30_0123456789ABCDEF0123456789abcdef" });
+    await report(board, { ...message, match: "g_000000006ac18f30_0123456789abcdef0123456789abcdef" });
+    await report(board, { ...message, match: "p_000000006ac18f30_0123456789abcdef0123456789abcdef\n" });
+    await report(board, { ...message, match: "b_000000006ac18f30_0123456789abcdef0123456789abcdef\n" });
     // A correct origin and session cannot authorize a different popup.
     const unrelatedEvent = host.waitForEvent("popup");
     await host.evaluate((url) => window.open(url), pages + "?unrelated=1");
@@ -191,3 +198,4 @@ test("host binds one public match, rejects forged messages, guests share the pla
     await Promise.all([hostContext.close(), guestContext.close()]);
   }
 });
+}

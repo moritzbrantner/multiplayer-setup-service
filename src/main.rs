@@ -537,7 +537,7 @@ async fn bind_game_reference(
     };
     let bytes = request.match_id.as_bytes();
     let valid_match = bytes.len() == 51
-        && bytes.starts_with(b"b_")
+        && (bytes.starts_with(b"b_") || bytes.starts_with(b"p_"))
         && bytes[18] == b'_'
         && bytes[2..18]
             .iter()
