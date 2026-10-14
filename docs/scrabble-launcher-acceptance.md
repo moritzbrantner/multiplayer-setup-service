@@ -101,3 +101,43 @@ Chromium desktop and touch projects with their actual project viewport/touch
 settings. The expected public reference, guest route, retry/reload and
 credential-storage assertions were unchanged. This remains launcher-boundary
 coverage; real Scrabble gameplay is covered separately by Scrabble #80.
+
+## Independent configured-match compatibility (#53)
+
+Consumer Scrabble #94 / PR #109 adds immutable selected profiles/settings under
+current Atlas 1.25/1.31/1.39 and execution priority 4.1. A configured shared-board
+match uses `p_<16 lowercase hex>_<32 lowercase hex>` so missing initialization
+cannot silently become a default legacy match. Existing `b_` match identities and
+all public reference fields remain unchanged. This service must accept exactly
+both bounded shared-board families, retain rejection of `g_` and malformed or
+uppercase IDs, and continue storing only the public opaque reference.
+
+Independent acceptance author extends the real compiled HTTP test for configured
+host/guest/forged credentials, concurrent identical registration, conflicts in
+both directions between legacy/configured matches, public-only lookup, renewal
+and expiry. The shared 61-second expiry test creates both families before one
+unchanged TTL wait. Strict malformed-p framing extends the existing rejection
+matrix. The launcher browser journey is parameterized over legacy and configured
+IDs in both existing desktop/touch projects. Every source/origin/session check,
+retry/reload/player route and credential-privacy assertion remains; the controlled
+Pages protocol peer still does not claim actual gameplay.
+
+Authoring baseline: `ce257ee1aba03e99c31f889a5c822bdf75e34ace`. Focused native
+execution genuinely fails: the real service returns 400 for a well-formed
+configured reference instead of reaching guest authorization (403). Later host
+registration/reuse/privacy assertions remain unrun at baseline. Log:
+`/tmp/setup53-native-baseline.log`. No production code is changed by this
+acceptance handoff. Current convention sourceRevision remains
+`5ad0db36974c8b0e5f9812c90ee34a4f227852c3`; task inspection is partial because
+source relationships/completion are undeclared, so full repository gates remain.
+
+Browser execution at authoring is unavailable: the declared runner needs a
+release service binary and coturn `turnserver`, and the current Node 24.16.0
+does not match this repository's exact 24.20.0 pin. These are setup gaps, not a
+claimed browser failure or pass. The worker must provision the declared tools
+and execute all four launcher cases after repair. Scrabble separately retains
+the actual selected-profile gameplay and deployed owner journey. Before merge,
+record **Awaiting live deployment verification** on #53 with head/revision,
+public launcher and actual configured-match owner steps. Leave #53 open while
+publishing or live evidence is pending; the native Scrabble #94 dependency must
+not imply the published launcher accepts configured IDs before verification.
