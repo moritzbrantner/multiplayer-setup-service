@@ -446,6 +446,14 @@ export class ContentPeerPool extends EventTarget {
     }
     if (parsed.peerId === this.session.participantId) return;
 
+    // Lifecycle signals must be able to retire a queue whose native work will
+    // never settle. Process them before queuing the following fresh offer.
+    if (typeof parsed.envelope.reject === "string" || parsed.envelope.close === true) {
+      const link = this.peers.get(parsed.peerId);
+      if (link?.connectionId === parsed.envelope.connectionId) this.#dropPeer(parsed.peerId, false);
+      return;
+    }
+
     const generation = this.signalingGeneration;
     let chain = this.signalChains.get(parsed.peerId);
     if (!chain) {
@@ -472,12 +480,6 @@ export class ContentPeerPool extends EventTarget {
   }
 
   async #handleSignal(peerId, envelope, generation) {
-    if (typeof envelope.reject === "string" || envelope.close === true) {
-      const link = this.peers.get(peerId);
-      if (link?.connectionId === envelope.connectionId) this.#dropPeer(peerId, false);
-      return;
-    }
-
     let link = this.peers.get(peerId);
     if (envelope.description?.type === "offer") {
       if (link && link.connectionId !== envelope.connectionId) {
