@@ -394,3 +394,124 @@ test("session closure closes its content pool and removes replacement subscripti
   assert.equal(pool.closed, true);
   assert.equal(pool.signaling, original);
 });
+
+for (const completion of ["resolve", "reject"]) {
+  test(`a retired pending ICE operation cannot block replacement negotiation or ordering (${completion})`, async () => {
+    const { sessions } = makeSessions(["11111111", "22222222"]);
+    const left = makePool(sessions.get("11111111"));
+    const right = makePool(sessions.get("22222222"));
+    let settleOld;
+    const oldPending = new Promise((resolve, reject) => {
+      settleOld = completion === "resolve" ? resolve : () => reject(new Error("retired ICE failed"));
+    });
+    let releaseCurrent;
+    try {
+      await left.connect("22222222");
+      await flush();
+      const old = left.peers.get("22222222");
+      assert.equal(old.peer.remoteDescription.type, "answer");
+      let oldStarted = false;
+      old.peer.addIceCandidate = () => { oldStarted = true; return oldPending; };
+      const sendCandidate = (connectionId, candidate) => sessions.get("22222222").signaling.send(JSON.stringify({
+        type: "signal", to: "11111111",
+        payload: { contentPeer: { v: 1, connectionId, candidate: { candidate } } },
+      }));
+      sendCandidate(old.connectionId, "retired");
+      await flush();
+      assert.equal(oldStarted, true, "the old native operation must actually be in flight");
+      // This offer arrived before retirement and is queued behind the old ICE.
+      // Its lower collision ID would replace the fresh link if replayed later.
+      sessions.get("22222222").signaling.send(JSON.stringify({
+        type: "signal", to: "11111111",
+        payload: { contentPeer: { v: 1, connectionId: "0000000000000000",
+          description: { type: "offer", sdp: "retired-queued-offer" } } },
+      }));
+      await flush();
+      left.disconnect("22222222");
+      await flush();
+      assert.equal(old.peer.connectionState, "closed");
+      await left.connect("22222222");
+      await flush();
+      const current = left.peers.get("22222222");
+      assert.notEqual(current, old);
+      assert.equal(current.peer.remoteDescription?.type, "answer", "fresh signaling must proceed while retired ICE remains unresolved");
+
+      const applied = [];
+      const currentPending = new Promise((resolve) => { releaseCurrent = resolve; });
+      current.peer.addIceCandidate = async (candidate) => {
+        applied.push(candidate.candidate);
+        if (candidate.candidate === "current-first") await currentPending;
+      };
+      sendCandidate(current.connectionId, "current-first");
+      await flush();
+      assert.deepEqual(applied, ["current-first"]);
+      settleOld();
+      await flush();
+      sendCandidate(current.connectionId, "current-second");
+      await flush();
+      assert.deepEqual(applied, ["current-first"], "retired completion must not bypass current signaling order");
+      assert.equal(left.peers.get("22222222"), current);
+      releaseCurrent();
+      await flush();
+      assert.deepEqual(applied, ["current-first", "current-second"]);
+      assert.equal(left.peers.get("22222222"), current);
+      assert.equal(current.peer.remoteDescription.type, "answer");
+    } finally {
+      settleOld();
+      releaseCurrent?.();
+      await flush();
+      left.close();
+      right.close();
+    }
+  });
+}
+
+for (const completion of ["resolve", "reject"]) {
+  test(`a remote close permits fresh negotiation while retired ICE remains pending (${completion})`, async () => {
+    const { bus, sessions } = makeSessions(["11111111", "22222222"]);
+    const left = makePool(sessions.get("11111111"));
+    const right = makePool(sessions.get("22222222"));
+    let settle;
+    const pending = new Promise((resolve, reject) => {
+      settle = completion === "resolve" ? resolve : () => reject(new Error("retired remote ICE failed"));
+    });
+    const signal = (socket, connectionId, data) => socket.send(JSON.stringify({
+      type: "signal", to: "11111111", payload: { contentPeer: { v: 1, connectionId, ...data } },
+    }));
+    try {
+      await left.connect("22222222");
+      await flush();
+      const old = left.peers.get("22222222");
+      assert.equal(old.peer.remoteDescription.type, "answer");
+      let entered = false;
+      old.peer.addIceCandidate = () => { entered = true; return pending; };
+      signal(sessions.get("22222222").signaling, old.connectionId, { candidate: { candidate: "old-pending" } });
+      await flush();
+      assert.equal(entered, true);
+      // Only the remote participant initiates replacement. Local disconnect is
+      // deliberately absent: the actual lifecycle envelope must retire the link.
+      right.disconnect("11111111");
+      await right.connect("11111111");
+      await flush();
+      const current = left.peers.get("22222222");
+      assert.notEqual(current, old, "a matching remote close must retire stalled local work");
+      assert.equal(old.peer.connectionState, "closed");
+      assert.equal(current.peer.remoteDescription?.type, "offer");
+      assert.equal(right.peers.get("11111111").peer.remoteDescription?.type, "answer", "the fresh offer queued after close must be answered before old ICE settles");
+      signal(sessions.get("22222222").signaling, old.connectionId, { close: true });
+      signal(bus.socket("99999999"), current.connectionId, { close: true });
+      await flush();
+      assert.equal(left.peers.get("22222222"), current, "stale or nonmember lifecycle signals cannot close the replacement");
+      settle();
+      await flush();
+      assert.equal(left.peers.get("22222222"), current);
+      assert.equal(current.peer.remoteDescription.type, "offer");
+      assert.equal(right.peers.get("11111111").peer.remoteDescription.type, "answer");
+    } finally {
+      settle();
+      await flush();
+      left.close();
+      right.close();
+    }
+  });
+}

@@ -61,8 +61,11 @@ async function connected(left, right, leftId, rightId) {
   await expect.poll(() => right.evaluate(() => window.acceptance.pool.contentPeerIds())).toEqual([leftId]);
 }
 
-for (const relay of [false, true]) {
-  test(relay ? "forced TURN uses issued credentials and enforces bulk opt-in" : "direct connection resumes verified content after signaling replacement", async ({ browser }, testInfo) => {
+for (const mode of ["direct", "retired-ice", "remote-retired-ice", "relay"]) {
+  const relay = mode === "relay";
+  const remoteRetiredIce = mode === "remote-retired-ice";
+  const retiredIce = mode === "retired-ice" || remoteRetiredIce;
+  test(relay ? "forced TURN uses issued credentials and enforces bulk opt-in" : remoteRetiredIce ? "remote-initiated recovery transfers content while retired ICE remains pending" : retiredIce ? "direct recovery transfers verified content while retired ICE remains pending" : "direct connection resumes verified content after signaling replacement", async ({ browser }, testInfo) => {
     const { viewport, isMobile = false, hasTouch = false } = testInfo.project.use;
     const contexts = await Promise.all([
       browser.newContext({ viewport, isMobile, hasTouch }),
@@ -92,6 +95,28 @@ for (const relay of [false, true]) {
 
       if (!relay) {
         const oldConnection = await left.evaluate((id) => window.acceptance.pool.peers.get(id).connectionId, guest.id);
+        if (retiredIce) {
+          // Hold the result of a real, valid end-of-candidates operation. This
+          // reproduces the captured browser boundary: closed RTC can leave an
+          // earlier native ICE promise pending while a replacement must recover.
+          await left.evaluate((id) => {
+            const state = window.acceptance;
+            const peer = state.pool.peers.get(id).peer;
+            const original = peer.addIceCandidate;
+            peer.addIceCandidate = function (candidate) {
+              return original.call(this, candidate).then(() => new Promise((resolve) => {
+                state.retiredIcePending = true;
+                state.releaseRetiredIce = () => { state.retiredIcePending = false; resolve(); };
+              }));
+            };
+          }, guest.id);
+          await right.evaluate(({ id, connectionId }) => {
+            window.acceptance.pool.signaling.send(JSON.stringify({ type: "signal", to: id,
+              payload: { contentPeer: { v: 1, connectionId, candidate: { candidate: "" } } },
+            }));
+          }, { id: host.id, connectionId: oldConnection });
+          await expect.poll(() => left.evaluate(() => window.acceptance.retiredIcePending === true)).toBe(true);
+        }
         await right.evaluate(() => {
           const state = window.acceptance;
           state.oldSocket = state.session.signaling;
@@ -103,8 +128,13 @@ for (const relay of [false, true]) {
           const state = window.acceptance;
           return state.session.signaling !== state.oldSocket && state.session.signaling?.readyState === WebSocket.OPEN && state.pool.signaling === state.session.signaling;
         })).toBe(true);
-        await left.evaluate((id) => window.acceptance.pool.disconnect(id), guest.id);
-        await connected(left, right, host.id, guest.id);
+        if (remoteRetiredIce) {
+          await right.evaluate((id) => window.acceptance.pool.disconnect(id), host.id);
+          await connected(right, left, guest.id, host.id);
+        } else {
+          await left.evaluate((id) => window.acceptance.pool.disconnect(id), guest.id);
+          await connected(left, right, host.id, guest.id);
+        }
         expect(await left.evaluate((id) => window.acceptance.pool.peers.get(id).connectionId, guest.id)).not.toBe(oldConnection);
         expect(await right.evaluate(() => {
           const state = window.acceptance;
@@ -123,10 +153,15 @@ for (const relay of [false, true]) {
         window.acceptance.session.sendReliable(id, { kind: "gameplay-while-upload-paused" });
       }, guest.id);
       await expect.poll(() => right.evaluate(() => window.acceptance.received)).toContainEqual({ kind: "gameplay-while-upload-paused" });
+      if (retiredIce) {
+        expect(await left.evaluate(() => window.acceptance.retiredIcePending)).toBe(true);
+        await left.evaluate(() => window.acceptance.releaseRetiredIce());
+        await expect.poll(() => left.evaluate(() => window.acceptance.pool.contentPeerIds())).toEqual([guest.id]);
+      }
       expect(pageErrors).toEqual([]);
       await testInfo.attach("acceptance-scope", { body: JSON.stringify({ path: expectedPath, twoIsolatedContexts: true, browserVersion: browser.version(), resumedVerifiedChunks: true, realMobileNetwork: false, deployedTls: false }), contentType: "application/json" });
     } finally {
-      for (const page of [left, right]) await page.evaluate(() => { window.acceptance?.exchange.close(); window.acceptance?.session.close(); }).catch(() => {});
+      for (const page of [left, right]) await page.evaluate(() => { window.acceptance?.releaseRetiredIce?.(); window.acceptance?.exchange.close(); window.acceptance?.session.close(); }).catch(() => {});
       await Promise.all(contexts.map((context) => context.close()));
     }
   });
