@@ -56,6 +56,7 @@ struct Lobby {
     host_participant_id: String,
     max_participants: usize,
     participants: HashMap<String, Participant>,
+    game_reference: Option<GameReference>,
 }
 
 struct Participant {
@@ -72,6 +73,8 @@ struct Connection {
 pub enum LobbyStoreError {
     Capacity,
     HostRequired,
+    GameNotBound,
+    GameReferenceConflict,
     InvalidCredentials,
     LobbyFull,
     LobbyNotFound,
@@ -120,6 +123,14 @@ pub struct LobbyStatus {
 pub struct RenewedLobby {
     pub expires_at: u64,
     pub max_expires_at: u64,
+}
+
+/// A public rendezvous pointer, never gameplay state or a capability.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameReference {
+    pub application: String,
+    pub match_id: String,
 }
 
 pub struct LobbyRegistration {
@@ -196,6 +207,7 @@ impl LobbyStore {
                     host_participant_id: participant_id.clone(),
                     max_participants,
                     participants,
+                    game_reference: None,
                 },
             );
 
@@ -274,6 +286,53 @@ impl LobbyStore {
             expires_at: lobby.expires_at,
             max_expires_at: lobby.max_expires_at,
         })
+    }
+
+    pub async fn game_reference(&self, lobby_id: &str) -> Result<GameReference, LobbyStoreError> {
+        let mut inner = self.inner.lock().await;
+        purge_lobby_if_expired(&mut inner, lobby_id);
+        inner
+            .lobbies
+            .get(lobby_id)
+            .ok_or(LobbyStoreError::LobbyNotFound)?
+            .game_reference
+            .clone()
+            .ok_or(LobbyStoreError::GameNotBound)
+    }
+
+    pub async fn bind_game_reference(
+        &self,
+        lobby_id: &str,
+        participant_id: &str,
+        token: &str,
+        reference: GameReference,
+    ) -> Result<GameReference, LobbyStoreError> {
+        let token_hash = hash_capability_token(token);
+        let mut inner = self.inner.lock().await;
+        purge_lobby_if_expired(&mut inner, lobby_id);
+        let lobby = inner
+            .lobbies
+            .get_mut(lobby_id)
+            .ok_or(LobbyStoreError::LobbyNotFound)?;
+        let participant = lobby
+            .participants
+            .get(participant_id)
+            .ok_or(LobbyStoreError::InvalidCredentials)?;
+        if !hashes_equal(&participant.token_hash, &token_hash) {
+            return Err(LobbyStoreError::InvalidCredentials);
+        }
+        if lobby.host_participant_id != participant_id {
+            return Err(LobbyStoreError::HostRequired);
+        }
+        if let Some(existing) = &lobby.game_reference {
+            return if existing == &reference {
+                Ok(existing.clone())
+            } else {
+                Err(LobbyStoreError::GameReferenceConflict)
+            };
+        }
+        lobby.game_reference = Some(reference.clone());
+        Ok(reference)
     }
 
     pub async fn authenticate(
@@ -756,7 +815,7 @@ mod tests {
 
     #[tokio::test]
     async fn every_addressed_operation_rejects_expiry_without_a_sweep() {
-        for operation in 0..6 {
+        for operation in 0..8 {
             let store = LobbyStore::new_with_lifetime_multiplier(4, 3);
             let created = store
                 .create_lobby(Duration::from_secs(60), 4)
@@ -804,6 +863,20 @@ mod tests {
                         .await
                         .map(|_| ())
                 }
+                5 => store.game_reference(&created.lobby_id).await.map(|_| ()),
+                6 => store
+                    .bind_game_reference(
+                        &created.lobby_id,
+                        &created.participant_id,
+                        &created.participant_token,
+                        GameReference {
+                            application: "scrabble".to_owned(),
+                            match_id: "b_000000006ac18f30_0123456789abcdef0123456789abcdef"
+                                .to_owned(),
+                        },
+                    )
+                    .await
+                    .map(|_| ()),
                 _ => store
                     .target_sender(
                         &created.lobby_id,

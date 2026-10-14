@@ -5,6 +5,7 @@ mod sockets;
 mod state;
 mod turn;
 
+use axum::extract::rejection::JsonRejection;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Query, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ORIGIN, SEC_WEBSOCKET_PROTOCOL};
@@ -12,7 +13,7 @@ use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use lobby::{LobbyStore, LobbyStoreError};
+use lobby::{GameReference, LobbyStore, LobbyStoreError};
 use protocol::{
     CAPABILITY_PROTOCOL_PREFIX, MAX_SIGNAL_BYTES, PeerRole, WEBSOCKET_PROTOCOL, format_room_code,
     is_valid_participant_id, is_valid_room_id, normalize_room_id,
@@ -99,6 +100,14 @@ struct CreateLobbyRequest {
 #[serde(rename_all = "camelCase")]
 struct RenewLobbyRequest {
     participant_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BindGameReferenceRequest {
+    participant_id: String,
+    application: String,
+    match_id: String,
 }
 
 #[derive(Serialize)]
@@ -241,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_str()
                 .is_ok_and(|origin| cors_origins.allows(origin))
         }))
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
         .allow_headers([CONTENT_TYPE, AUTHORIZATION])
         .max_age(Duration::from_secs(86_400));
 
@@ -255,6 +264,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/lobbies/{lobby_id}", get(lobby_status))
         .route("/lobbies/{lobby_id}/join", post(join_lobby))
         .route("/lobbies/{lobby_id}/renew", post(renew_lobby))
+        .route(
+            "/lobbies/{lobby_id}/game-reference",
+            get(get_game_reference).put(bind_game_reference),
+        )
         .route(
             "/lobbies/{lobby_id}/turn-credentials",
             post(turn::issue_turn_credentials),
@@ -476,6 +489,84 @@ async fn lobby_status(State(state): State<AppState>, Path(raw_lobby_id): Path<St
     }
 }
 
+async fn get_game_reference(
+    State(state): State<AppState>,
+    Path(raw_lobby_id): Path<String>,
+) -> Response {
+    let Some(lobby_id) = validated_room_id(&raw_lobby_id) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid-lobby-id",
+            "Invalid lobby code",
+        );
+    };
+    match state.lobbies.game_reference(&lobby_id).await {
+        Ok(reference) => Json(reference).into_response(),
+        Err(error) => lobby_store_error_response(error),
+    }
+}
+
+async fn bind_game_reference(
+    State(state): State<AppState>,
+    Path(raw_lobby_id): Path<String>,
+    headers: HeaderMap,
+    request: Result<Json<BindGameReferenceRequest>, JsonRejection>,
+) -> Response {
+    let Some(lobby_id) = validated_room_id(&raw_lobby_id) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid-lobby-id",
+            "Invalid lobby code",
+        );
+    };
+    let Some(token) = bearer_capability_token(&headers) else {
+        return invalid_credentials_response();
+    };
+    let request = match request {
+        Ok(Json(request)) => request,
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return rejection.into_response();
+        }
+        Err(_) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid-game-reference",
+                "Invalid public game reference",
+            );
+        }
+    };
+    let bytes = request.match_id.as_bytes();
+    let valid_match = bytes.len() == 51
+        && bytes.starts_with(b"b_")
+        && bytes[18] == b'_'
+        && bytes[2..18]
+            .iter()
+            .chain(bytes[19..].iter())
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte));
+    if !is_valid_participant_id(&request.participant_id)
+        || request.application != "scrabble"
+        || !valid_match
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid-game-reference",
+            "Invalid public game reference",
+        );
+    }
+    let reference = GameReference {
+        application: request.application,
+        match_id: request.match_id,
+    };
+    match state
+        .lobbies
+        .bind_game_reference(&lobby_id, &request.participant_id, &token, reference)
+        .await
+    {
+        Ok(reference) => Json(reference).into_response(),
+        Err(error) => lobby_store_error_response(error),
+    }
+}
+
 async fn renew_lobby(
     State(state): State<AppState>,
     Path(raw_lobby_id): Path<String>,
@@ -654,6 +745,16 @@ fn store_error_response(error: StoreError) -> Response {
 
 fn lobby_store_error_response(error: LobbyStoreError) -> Response {
     match error {
+        LobbyStoreError::GameNotBound => error_response(
+            StatusCode::CONFLICT,
+            "game-not-bound",
+            "No game has been registered",
+        ),
+        LobbyStoreError::GameReferenceConflict => error_response(
+            StatusCode::CONFLICT,
+            "game-reference-conflict",
+            "Lobby already references another game",
+        ),
         LobbyStoreError::LobbyNotFound => error_response(
             StatusCode::NOT_FOUND,
             "lobby-not-found",
@@ -667,7 +768,7 @@ fn lobby_store_error_response(error: LobbyStoreError) -> Response {
         LobbyStoreError::HostRequired => error_response(
             StatusCode::FORBIDDEN,
             "host-required",
-            "Only the lobby host can renew the lobby",
+            "Only the lobby host can perform this action",
         ),
         LobbyStoreError::InvalidCredentials => invalid_credentials_response(),
         LobbyStoreError::ParticipantNotFound => error_response(

@@ -81,6 +81,8 @@ The service selects `multiplayer-setup-v1`; the capability subprotocol is used o
 - `POST /lobbies/:lobbyId/join` — join and receive an independent participant capability.
 - `GET /lobbies/:lobbyId` — public participant-count/expiry metadata without capabilities.
 - `POST /lobbies/:lobbyId/renew` — host-capability-authorized bounded lifetime extension.
+- `PUT /lobbies/:lobbyId/game-reference` — register an immutable public Scrabble match reference using the host Bearer capability and JSON `{participantId, application: "scrabble", matchId}`. Canonical match IDs use `b_<16 lowercase hex>_<32 lowercase hex>`; identical retries succeed, replacements return `409 game-reference-conflict`.
+- `GET /lobbies/:lobbyId/game-reference` — read only `{application, matchId}` publicly, or `409 game-not-bound` before registration. Expired/missing lobbies return 404. Renewal preserves the reference; service restart discards it with the lobby.
 - `GET /lobbies/:lobbyId/connect?participantId=...` — authenticated targeted WebSocket signaling.
 - `POST /lobbies/:lobbyId/turn-credentials` — optional short-lived TURN ICE credentials for an authenticated participant.
 
@@ -172,6 +174,29 @@ For restrictive networks, an authenticated lobby session can fetch and install s
 Optional bulk asset sharing remains separately opt-in. `ContentPeerPool` denies positively identified TURN-relayed bulk sends by default; a game must explicitly choose an allow or byte-rate-limited relay policy.
 
 See [`docs/peer-content-distribution.md`](docs/peer-content-distribution.md) and [`docs/resilience-roadmap.md`](docs/resilience-roadmap.md) for the completed browser/content hardening boundaries.
+
+### Scrabble launcher
+
+Open `/scrabble.html` (linked from the homepage), create a lobby, share its
+Invite link, and open the Scrabble board. The trusted Pages board creates the
+actual game and reports its public match ID to the launcher. Guests open the
+invite and choose Open Scrabble player; if the board is still creating the game,
+choose Check for game when it is ready. A host may also open a player screen.
+
+The launcher trusts only its opened board window at
+`https://moritzbrantner.github.io`, the same setup session, and a canonical match
+ID. Host credentials stay in launcher memory. Reloading loses host authority and
+resolves the existing reference. Repeated Open reuses the board; a closed board
+must be recovered through its original address rather than silently creating
+another game. Scrabble owns its creation nonce, gameplay and match lifetime.
+Canonical Scrabble match invitations continue independently of setup-lobby
+expiry.
+
+Production uses the same-origin setup API. A `setupApi` query override is honored
+only on loopback for local acceptance. Build the browser assets with
+`bun run --cwd web build`; deploy its generated JavaScript alongside HTML/CSS.
+The independent boundary contract and its gameplay/live-verification limits are
+in [Scrabble launcher acceptance](docs/scrabble-launcher-acceptance.md).
 
 ## Development and validation
 
