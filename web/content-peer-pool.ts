@@ -447,22 +447,28 @@ export class ContentPeerPool extends EventTarget {
     if (parsed.peerId === this.session.participantId) return;
 
     const generation = this.signalingGeneration;
-    const previous = this.signalChains.get(parsed.peerId) ?? Promise.resolve();
-    const next = previous
+    let chain = this.signalChains.get(parsed.peerId);
+    if (!chain) {
+      chain = { active: true, tail: Promise.resolve() };
+      this.signalChains.set(parsed.peerId, chain);
+    }
+    const next = chain.tail
       .then(() => {
-        if (!this.closed && generation === this.signalingGeneration) {
+        if (chain.active && !this.closed && generation === this.signalingGeneration) {
           return this.#handleSignal(parsed.peerId, parsed.envelope, generation);
         }
       })
       .catch((error) => {
-        if (!this.closed && generation === this.signalingGeneration) {
+        if (chain.active && !this.closed && generation === this.signalingGeneration) {
           this.dispatchEvent(new CustomEvent("error", { detail: { peerId: parsed.peerId, error } }));
         }
       })
       .finally(() => {
-        if (this.signalChains.get(parsed.peerId) === next) this.signalChains.delete(parsed.peerId);
+        if (this.signalChains.get(parsed.peerId) === chain && chain.tail === next) {
+          this.signalChains.delete(parsed.peerId);
+        }
       });
-    this.signalChains.set(parsed.peerId, next);
+    chain.tail = next;
   }
 
   async #handleSignal(peerId, envelope, generation) {
@@ -479,7 +485,9 @@ export class ContentPeerPool extends EventTarget {
           this.#send(peerId, envelope.connectionId, { reject: "collision" });
           return;
         }
-        this.#dropPeer(peerId, false);
+        // This already-serialized offer takes ownership of the replacement.
+        // Keep its queue so subsequent candidates cannot overtake negotiation.
+        this.#dropPeer(peerId, false, true);
         link = null;
       }
       if (!link) {
@@ -496,7 +504,7 @@ export class ContentPeerPool extends EventTarget {
     if (envelope.description) {
       await link.peer.setRemoteDescription(envelope.description);
       this.#assertCurrent(link, generation);
-      await this.#flushCandidates(link);
+      await this.#flushCandidates(link, generation);
       this.#assertCurrent(link, generation);
       if (envelope.description.type === "offer") {
         const answer = await link.peer.createAnswer();
@@ -513,9 +521,12 @@ export class ContentPeerPool extends EventTarget {
     }
   }
 
-  async #flushCandidates(link) {
+  async #flushCandidates(link, generation) {
     const candidates = link.pendingCandidates.splice(0);
-    for (const candidate of candidates) await link.peer.addIceCandidate(candidate);
+    for (const candidate of candidates) {
+      await link.peer.addIceCandidate(candidate);
+      this.#assertCurrent(link, generation);
+    }
   }
 
   #send(peerId, connectionId, data) {
@@ -536,9 +547,16 @@ export class ContentPeerPool extends EventTarget {
     );
   }
 
-  #dropPeer(peerId, notify) {
+  #dropPeer(peerId, notify, preserveSignalChain = false) {
     const link = this.peers.get(peerId);
     if (!link) return;
+    if (!preserveSignalChain) {
+      // Closing native RTC work need not settle its promises. Retire the whole
+      // queue, including not-yet-started tasks, without blocking a fresh link.
+      const chain = this.signalChains.get(peerId);
+      if (chain) chain.active = false;
+      this.signalChains.delete(peerId);
+    }
     this.peers.delete(peerId);
     if (notify && signalingOpen(this.signaling)) {
       try {
