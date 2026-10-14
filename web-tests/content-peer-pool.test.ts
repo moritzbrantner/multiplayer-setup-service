@@ -465,3 +465,53 @@ for (const completion of ["resolve", "reject"]) {
     }
   });
 }
+
+for (const completion of ["resolve", "reject"]) {
+  test(`a remote close permits fresh negotiation while retired ICE remains pending (${completion})`, async () => {
+    const { bus, sessions } = makeSessions(["11111111", "22222222"]);
+    const left = makePool(sessions.get("11111111"));
+    const right = makePool(sessions.get("22222222"));
+    let settle;
+    const pending = new Promise((resolve, reject) => {
+      settle = completion === "resolve" ? resolve : () => reject(new Error("retired remote ICE failed"));
+    });
+    const signal = (socket, connectionId, data) => socket.send(JSON.stringify({
+      type: "signal", to: "11111111", payload: { contentPeer: { v: 1, connectionId, ...data } },
+    }));
+    try {
+      await left.connect("22222222");
+      await flush();
+      const old = left.peers.get("22222222");
+      assert.equal(old.peer.remoteDescription.type, "answer");
+      let entered = false;
+      old.peer.addIceCandidate = () => { entered = true; return pending; };
+      signal(sessions.get("22222222").signaling, old.connectionId, { candidate: { candidate: "old-pending" } });
+      await flush();
+      assert.equal(entered, true);
+      // Only the remote participant initiates replacement. Local disconnect is
+      // deliberately absent: the actual lifecycle envelope must retire the link.
+      right.disconnect("11111111");
+      await right.connect("11111111");
+      await flush();
+      const current = left.peers.get("22222222");
+      assert.notEqual(current, old, "a matching remote close must retire stalled local work");
+      assert.equal(old.peer.connectionState, "closed");
+      assert.equal(current.peer.remoteDescription?.type, "offer");
+      assert.equal(right.peers.get("11111111").peer.remoteDescription?.type, "answer", "the fresh offer queued after close must be answered before old ICE settles");
+      signal(sessions.get("22222222").signaling, old.connectionId, { close: true });
+      signal(bus.socket("99999999"), current.connectionId, { close: true });
+      await flush();
+      assert.equal(left.peers.get("22222222"), current, "stale or nonmember lifecycle signals cannot close the replacement");
+      settle();
+      await flush();
+      assert.equal(left.peers.get("22222222"), current);
+      assert.equal(current.peer.remoteDescription.type, "offer");
+      assert.equal(right.peers.get("11111111").peer.remoteDescription.type, "answer");
+    } finally {
+      settle();
+      await flush();
+      left.close();
+      right.close();
+    }
+  });
+}

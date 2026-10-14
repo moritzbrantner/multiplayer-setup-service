@@ -61,10 +61,11 @@ async function connected(left, right, leftId, rightId) {
   await expect.poll(() => right.evaluate(() => window.acceptance.pool.contentPeerIds())).toEqual([leftId]);
 }
 
-for (const mode of ["direct", "retired-ice", "relay"]) {
+for (const mode of ["direct", "retired-ice", "remote-retired-ice", "relay"]) {
   const relay = mode === "relay";
-  const retiredIce = mode === "retired-ice";
-  test(relay ? "forced TURN uses issued credentials and enforces bulk opt-in" : retiredIce ? "direct recovery transfers verified content while retired ICE remains pending" : "direct connection resumes verified content after signaling replacement", async ({ browser }, testInfo) => {
+  const remoteRetiredIce = mode === "remote-retired-ice";
+  const retiredIce = mode === "retired-ice" || remoteRetiredIce;
+  test(relay ? "forced TURN uses issued credentials and enforces bulk opt-in" : remoteRetiredIce ? "remote-initiated recovery transfers content while retired ICE remains pending" : retiredIce ? "direct recovery transfers verified content while retired ICE remains pending" : "direct connection resumes verified content after signaling replacement", async ({ browser }, testInfo) => {
     const { viewport, isMobile = false, hasTouch = false } = testInfo.project.use;
     const contexts = await Promise.all([
       browser.newContext({ viewport, isMobile, hasTouch }),
@@ -127,8 +128,13 @@ for (const mode of ["direct", "retired-ice", "relay"]) {
           const state = window.acceptance;
           return state.session.signaling !== state.oldSocket && state.session.signaling?.readyState === WebSocket.OPEN && state.pool.signaling === state.session.signaling;
         })).toBe(true);
-        await left.evaluate((id) => window.acceptance.pool.disconnect(id), guest.id);
-        await connected(left, right, host.id, guest.id);
+        if (remoteRetiredIce) {
+          await right.evaluate((id) => window.acceptance.pool.disconnect(id), host.id);
+          await connected(right, left, guest.id, host.id);
+        } else {
+          await left.evaluate((id) => window.acceptance.pool.disconnect(id), guest.id);
+          await connected(left, right, host.id, guest.id);
+        }
         expect(await left.evaluate((id) => window.acceptance.pool.peers.get(id).connectionId, guest.id)).not.toBe(oldConnection);
         expect(await right.evaluate(() => {
           const state = window.acceptance;

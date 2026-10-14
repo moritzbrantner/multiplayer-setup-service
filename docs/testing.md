@@ -76,3 +76,32 @@ local coturn 4.6.1 and Playwright 1.63.0 are used; build outputs are disposable.
 Shared conventions resolve successfully at
 `5ad0db36974c8b0e5f9812c90ee34a4f227852c3`; target inspection is unavailable,
 so full repository completion gates remain required.
+
+### Review regression: remote-initiated replacement
+
+Review finding4276967139 identified the complementary lifecycle boundary: the
+remote peer's matching close envelope must retire a stalled local link before a
+subsequent fresh offer, without requiring a separate local disconnect. The two
+additional pool contracts hold old ICE, initiate disconnect/connect only from the
+remote public pool, and require a fresh offer/answer before old resolve/reject.
+Late completion, stale old-ID closes and nonmember closes must leave the fresh
+link intact. This preserves existing roster and connection-identity authority.
+
+At unchanged production `f030ada`, twelve existing pool cases pass and both new
+remote-close cases fail because the local old link is still present. Later fresh
+answer, stale/nonmember and late-completion assertions are unrun on that baseline.
+Log `/tmp/setup52-remote-close-baseline-f030ada.log`; Node24.20 syntax and diff
+whitespace checks pass. The additional real-browser mode retires the link from
+the remote pool after signaling replacement, retaining actual content, gameplay,
+old-pending barrier and timeouts. It supplements the original direct, local
+retirement and TURN cases; unit scheduling alone does not prove remote RTC or
+public deployment acceptance.
+
+The additional remote-initiated actual Chromium desktop and touch cases both
+pass at `f030ada` (17.4 seconds total). They are green integrated invariants,
+not a claimed reproduction of the queued-control-envelope defect: the
+independently scheduled pool cases above reproduce that defect. Both layers
+remain mandatory on the repaired head. Browser baseline log
+`/tmp/setup52-remote-browser-baseline-f030ada.log`; private release/output paths
+alone were substituted by the same disposable driver, with unchanged inputs,
+projects, expectations and timeouts.
