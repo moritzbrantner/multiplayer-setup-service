@@ -248,6 +248,8 @@ fn scrabble_binding_validates_bounded_game_reference_before_mutation() {
         "p_000000006ac18f30-0123456789abcdef0123456789abcdef",
         "p_000000006ac18f30_0123456789abcdef0123456789abcde",
         "p_000000006ac18f30_0123456789abcdef0123456789abcdef0",
+        "p_000000006ac18f30_0123456789abcdef0123456789abcdef\n",
+        "b_000000006ac18f30_0123456789abcdef0123456789abcdef\n",
         "https://evil.example/game",
         &"b_".repeat(512),
     ] {

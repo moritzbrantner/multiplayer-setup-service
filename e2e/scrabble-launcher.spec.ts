@@ -92,6 +92,8 @@ test(family + ": host binds one public match, rejects forged messages, guests sh
     await report(board, { ...message, match: "https://untrusted.example/" });
     await report(board, { ...message, match: "p_000000006ac18f30_0123456789ABCDEF0123456789abcdef" });
     await report(board, { ...message, match: "g_000000006ac18f30_0123456789abcdef0123456789abcdef" });
+    await report(board, { ...message, match: "p_000000006ac18f30_0123456789abcdef0123456789abcdef\n" });
+    await report(board, { ...message, match: "b_000000006ac18f30_0123456789abcdef0123456789abcdef\n" });
     // A correct origin and session cannot authorize a different popup.
     const unrelatedEvent = host.waitForEvent("popup");
     await host.evaluate((url) => window.open(url), pages + "?unrelated=1");
