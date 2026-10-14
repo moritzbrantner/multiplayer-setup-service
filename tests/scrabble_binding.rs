@@ -294,3 +294,57 @@ fn scrabble_binding_disappears_on_service_restart_with_its_lobby() {
     assert_eq!(lookup(&restarted, &lobby).0, 404);
     assert_eq!(bind(&restarted, &lobby, &host, MATCH).0, 404);
 }
+
+#[test]
+fn malformed_game_reference_json_shapes_return_bad_request_without_binding() {
+    let service = Service::start();
+    let host = create_lobby(&service);
+    let lobby = host["lobbyId"].as_str().unwrap();
+    let valid = serde_json::json!({"participantId":host["participantId"],"application":"scrabble","matchId":MATCH});
+    let mut malformed = Vec::new();
+    for field in ["participantId", "application", "matchId"] {
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        malformed.push(missing);
+        for wrong in [
+            serde_json::Value::Null,
+            serde_json::json!(17),
+            serde_json::json!([]),
+        ] {
+            let mut candidate = valid.clone();
+            candidate[field] = wrong;
+            malformed.push(candidate);
+        }
+    }
+    let mut unknown = valid.clone();
+    unknown["privateState"] = serde_json::json!({});
+    malformed.push(unknown);
+    malformed.extend([
+        serde_json::json!([]),
+        serde_json::json!(null),
+        serde_json::json!("not an object"),
+    ]);
+    for candidate in malformed {
+        let (status, body) = request(
+            service.port,
+            "PUT",
+            &format!("/lobbies/{lobby}/game-reference"),
+            Some(&candidate.to_string()),
+            &[(
+                "Authorization",
+                &format!("Bearer {}", host["participantToken"].as_str().unwrap()),
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            status, 400,
+            "malformed public reference shapes must be bad requests"
+        );
+        assert_eq!(json(&body)["error"]["code"], "invalid-game-reference");
+        assert_eq!(
+            lookup(&service, lobby).0,
+            409,
+            "invalid shape must not bind"
+        );
+    }
+}
