@@ -5,6 +5,7 @@ mod sockets;
 mod state;
 mod turn;
 
+use axum::extract::rejection::JsonRejection;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Query, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ORIGIN, SEC_WEBSOCKET_PROTOCOL};
@@ -509,7 +510,7 @@ async fn bind_game_reference(
     State(state): State<AppState>,
     Path(raw_lobby_id): Path<String>,
     headers: HeaderMap,
-    Json(request): Json<BindGameReferenceRequest>,
+    request: Result<Json<BindGameReferenceRequest>, JsonRejection>,
 ) -> Response {
     let Some(lobby_id) = validated_room_id(&raw_lobby_id) else {
         return error_response(
@@ -520,6 +521,19 @@ async fn bind_game_reference(
     };
     let Some(token) = bearer_capability_token(&headers) else {
         return invalid_credentials_response();
+    };
+    let request = match request {
+        Ok(Json(request)) => request,
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return rejection.into_response();
+        }
+        Err(_) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid-game-reference",
+                "Invalid public game reference",
+            );
+        }
     };
     let bytes = request.match_id.as_bytes();
     let valid_match = bytes.len() == 51
