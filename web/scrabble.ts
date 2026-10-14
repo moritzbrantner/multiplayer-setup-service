@@ -7,7 +7,7 @@ const api = new URL(
   loopback ? params.get("setupApi") || location.origin : location.origin,
 );
 const canonicalLobby = /^[0123456789ABCDEFGHJKMNPQRSTVWXYZ]{12}$/;
-const canonicalMatch = /^b_[0-9a-f]{16}_[0-9a-f]{32}$/;
+const canonicalMatch = /^[bp]_[0-9a-f]{16}_[0-9a-f]{32}$/;
 
 function button(id: string): HTMLButtonElement {
   const element = document.getElementById(id);
