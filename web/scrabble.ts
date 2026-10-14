@@ -72,7 +72,7 @@ async function resolve() {
   try {
     const response = await fetch(
       new URL(`/lobbies/${session}/game-reference`, api),
-      { cache: "no-store" },
+      { cache: "no-store", signal: AbortSignal.timeout(5000) },
     );
     const data: unknown = await response.json();
     if (response.status === 409) {
@@ -115,6 +115,7 @@ create.addEventListener("click", async () => {
   try {
     const response = await fetch(new URL("/lobbies", api), {
       method: "POST",
+      signal: AbortSignal.timeout(5000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ maxParticipants: 16 }),
     });
@@ -211,6 +212,7 @@ window.addEventListener("message", async (event: MessageEvent<unknown>) => {
       new URL(`/lobbies/${session}/game-reference`, api),
       {
         method: "PUT",
+        signal: AbortSignal.timeout(5000),
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${host.participantToken}`,
@@ -234,9 +236,13 @@ window.addEventListener("message", async (event: MessageEvent<unknown>) => {
     binding = false;
   }
 });
-if (session) {
+if (params.has("session")) {
   create.hidden = true;
-  if (canonicalLobby.test(session)) {
+  if (
+    session &&
+    params.getAll("session").length === 1 &&
+    canonicalLobby.test(session)
+  ) {
     showSession();
     void resolve();
   } else {
