@@ -12,9 +12,10 @@ test.use({ trace: "off" }); // Host capabilities must not enter retained traces.
 
 test("host binds one public match, rejects forged messages, guests share the player route", async ({
   browser,
-}) => {
-  const hostContext = await browser.newContext();
-  const guestContext = await browser.newContext();
+}, testInfo) => {
+  const { viewport, isMobile = false, hasTouch = false } = testInfo.project.use;
+  const hostContext = await browser.newContext({ viewport, isMobile, hasTouch });
+  const guestContext = await browser.newContext({ viewport, isMobile, hasTouch });
   const host = await hostContext.newPage();
   const guest = await guestContext.newPage();
   const credentials = [];
@@ -39,12 +40,6 @@ test("host binds one public match, rejects forged messages, guests share the pla
         body: "<!doctype html><title>Controlled Scrabble Pages protocol peer</title><p>Scrabble boundary fixture</p>",
       }),
     );
-    await context.route("https://untrusted.example/**", (route) =>
-      route.fulfill({
-        contentType: "text/html",
-        body: "<!doctype html><title>Untrusted origin</title>",
-      }),
-    );
   }
   try {
     await host.goto("http://127.0.0.1:4173" + launcher);
@@ -60,6 +55,16 @@ test("host binds one public match, rejects forged messages, guests share the pla
       "session",
       "setupApi",
     ]);
+    // Retain the browser's actual designated WindowProxy for an isolated
+    // MessageEvent origin check; no application internals or secrets are read.
+    await host.evaluate(() => {
+      const open = window.open.bind(window);
+      window.open = (...args) => {
+        const popup = open(...args);
+        window.acceptanceBoardWindow ??= popup;
+        return popup;
+      };
+    });
     const popupEvent = host.waitForEvent("popup");
     await host
       .getByRole("button", { name: "Open Scrabble board", exact: true })
@@ -88,9 +93,18 @@ test("host binds one public match, rejects forged messages, guests share the pla
     const unrelated = await unrelatedEvent;
     await unrelated.waitForLoadState();
     await report(unrelated, message);
-    // Even the designated popup loses authority after changing origin.
-    await board.goto("https://untrusted.example/");
-    await report(board, message);
+    // Chromium severs opener on this cross-site navigation, which prevents
+    // delivery and destroys subsequent positive reporting. Isolate the handler's
+    // origin guard at its actual EventTarget boundary instead: correct popup
+    // source, valid session/match, untrusted event origin. Real browser-generated
+    // postMessage events above/below cover the remaining source/session path.
+    await host.evaluate((data) => {
+      window.dispatchEvent(new MessageEvent("message", {
+        origin: "https://untrusted.example",
+        source: window.acceptanceBoardWindow,
+        data,
+      }));
+    }, message);
     // Message dispatch is asynchronous: a later posted barrier proves all the
     // earlier messages were delivered before inspecting network side effects.
     await host.evaluate(
@@ -112,7 +126,6 @@ test("host binds one public match, rejects forged messages, guests share the pla
         await host.request.get(`${setupApi}/lobbies/${session}/game-reference`)
       ).status(),
     ).toBe(409);
-    await board.goto(boardUrl.href);
     await report(board, message);
     await expect
       .poll(async () =>

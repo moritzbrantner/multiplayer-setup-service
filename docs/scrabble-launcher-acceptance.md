@@ -83,3 +83,21 @@ baseline: its prerequisite `target/release/multiplayer-setup-service` was absent
 (exit 127), and `turnserver` was not installed. This is missing browser execution
 evidence, not a claimed browser failure/pass. The boundary tests must run after
 those documented runner prerequisites are provisioned.
+
+## Independent browser fixture correction
+
+Chromium severs `window.opener` when the designated popup navigates to the
+untrusted site in this fixture, so that navigation prevented message delivery
+and destroyed the later positive report. The corrected boundary test preserves
+the designated popup, dispatches a MessageEvent at the actual launcher event
+target with its genuine WindowProxy, correct session/match and an untrusted
+origin, and proves no registration occurs. Real browser-generated postMessage
+continues to exercise incorrect session/match, unrelated popup source, and
+successful trusted reporting. This isolates the handler's origin decision;
+it does not claim a browser permits arbitrary spoofing of message origins.
+
+Independent re-verification on the implementation candidate passed both
+Chromium desktop and touch projects with their actual project viewport/touch
+settings. The expected public reference, guest route, retry/reload and
+credential-storage assertions were unchanged. This remains launcher-boundary
+coverage; real Scrabble gameplay is covered separately by Scrabble #80.
