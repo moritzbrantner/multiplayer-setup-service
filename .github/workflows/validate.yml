@@ -48,3 +48,47 @@ jobs:
         run: cargo build --release --locked
       - name: Test release performance guardrails
         run: cargo test --release --test performance_guardrails --locked -- --nocapture
+
+  browser-validation:
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    uses: ./.github/workflows/browser-acceptance.yml
+    secrets: inherit
+    permissions:
+      contents: read
+
+  convergence-validation:
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    uses: ./.github/workflows/convergence.yml
+    secrets: inherit
+    permissions:
+      contents: read
+
+  pages-validation:
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    uses: ./.github/workflows/pages.yml
+    secrets: inherit
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+  profile-validation:
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    uses: ./.github/workflows/runtime-profile.yml
+    secrets: inherit
+    permissions:
+      contents: read
+
+  merge-ready:
+    name: ${{ github.event_name == 'pull_request' && 'merge-ready' || 'validation-summary' }}
+    if: ${{ always() }}
+    needs: ["validate", "browser-validation", "convergence-validation", "pages-validation", "profile-validation"]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: moritzbrantner/reusable-workflows/.github/actions/merge-ready@b0f25f241d76af2584dfc9e375084ff5c5cb97da
+        with:
+          needs: ${{ toJSON(needs) }}
+          required: '["validate", "browser-validation", "convergence-validation", "pages-validation", "profile-validation"]'
+          allow-skipped: ${{ (github.event_name != 'pull_request' || github.base_ref != 'main') && '["browser-validation", "convergence-validation", "pages-validation", "profile-validation"]' || '[]' }}

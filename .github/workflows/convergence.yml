@@ -1,8 +1,7 @@
 name: Repository Convergence
 
 on:
-  pull_request:
-    branches: [main]
+  workflow_call:
   push:
     branches: [main]
 
@@ -10,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: convergence-${{ github.event.pull_request.number || github.ref }}
+  group: multiplayer-setup-service-convergence-convergence-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
