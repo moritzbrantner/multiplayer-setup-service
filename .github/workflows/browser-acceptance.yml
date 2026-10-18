@@ -1,8 +1,7 @@
 name: Browser Acceptance
 
 on:
-  pull_request:
-    branches: [main]
+  workflow_call:
   push:
     branches: [main]
   workflow_dispatch:
@@ -11,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: browser-acceptance-${{ github.event.pull_request.number || github.ref }}
+  group: multiplayer-setup-service-browser-acceptance-browser-acceptance-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
