@@ -80,7 +80,7 @@ jobs:
       contents: read
 
   merge-ready:
-    name: merge-ready
+    name: ${{ github.event_name == 'pull_request' && 'merge-ready' || 'validation-summary' }}
     if: ${{ always() }}
     needs: ["validate", "browser-validation", "convergence-validation", "pages-validation", "profile-validation"]
     runs-on: ubuntu-latest
