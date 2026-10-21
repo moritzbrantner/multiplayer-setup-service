@@ -38,7 +38,7 @@ jobs:
         uses: moritzbrantner/coding-tooling@54b6ae146fc8795022283012ce1fd58686cd4b9a
         with:
           operation: conformance
-          bun-version: 1.4.0
+          bun-version: 1.4.3
           report-path: .artifacts/coding-tooling/conformance.json
 
       - name: Foundation audit
@@ -46,7 +46,7 @@ jobs:
         uses: moritzbrantner/coding-tooling@54b6ae146fc8795022283012ce1fd58686cd4b9a
         with:
           operation: foundation
-          bun-version: 1.4.0
+          bun-version: 1.4.3
           report-path: .artifacts/coding-tooling/foundation.json
 
       - name: Deterministic findings
@@ -54,7 +54,7 @@ jobs:
         uses: moritzbrantner/coding-tooling@54b6ae146fc8795022283012ce1fd58686cd4b9a
         with:
           operation: findings
-          bun-version: 1.4.0
+          bun-version: 1.4.3
           report-path: .artifacts/coding-tooling/findings.json
 
       - name: Upload convergence evidence

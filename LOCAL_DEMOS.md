@@ -4,7 +4,7 @@ The demos exercise the browser-to-browser layer above the signaling service with
 
 ## Run
 
-Requirements: Rust 1.98.0 (pinned by the repository), Bun 1.4.0, and Python 3.
+Requirements: Rust 1.98.0 (pinned by the repository), Bun 1.4.3, and Python 3.
 
 ```bash
 ./run-local-demos.sh
