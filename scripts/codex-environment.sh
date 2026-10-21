@@ -88,8 +88,8 @@ if [[ -n "$desired_bun" ]]; then
   fi
   observed_bun="$(bun --version)"
   if [[ "$observed_bun" != "$desired_bun" ]]; then
-    printf 'Bun preflight mismatch: expected %s, got %s\n' "$desired_bun" "$observed_bun" >&2
-    exit 1
+    # Bun tracks latest (owner decision 2026-10-21); packageManager is informational.
+    printf 'Bun %s differs from packageManager bun@%s; continuing\n' "$observed_bun" "$desired_bun" >&2
   fi
 fi
 
@@ -151,8 +151,8 @@ fi
 if [[ -n "$desired_bun" ]]; then
   observed_bun="$(bun --version)"
   if [[ "$observed_bun" != "$desired_bun" ]]; then
-    printf 'Bun preflight mismatch: expected %s, got %s\n' "$desired_bun" "$observed_bun" >&2
-    exit 1
+    # Bun tracks latest (owner decision 2026-10-21); packageManager is informational.
+    printf 'Bun %s differs from packageManager bun@%s; continuing\n' "$observed_bun" "$desired_bun" >&2
   fi
 fi
 if [[ -n "$rust_toolchain" ]]; then
