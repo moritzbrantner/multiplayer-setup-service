@@ -61,7 +61,7 @@ physical mobile or Wi-Fi/cellular acceptance.
 
 Baseline evidence before repair: production `ce257ee1aba03e99c31f889a5c822bdf75e34ace`,
 freshly generated browser modules and freshly compiled locked release service.
-Pinned Bun 1.4.0 reports ten existing pool tests passing and both new cases
+Pinned Bun 1.4.3 reports ten existing pool tests passing and both new cases
 failing because the replacement has no remote answer while old ICE is pending
 (`/tmp/setup52-pending-ice-unit-baseline.log`). Actual Chromium desktop and touch
 both fail at the second connection's unchanged 20-second readiness assertion;
