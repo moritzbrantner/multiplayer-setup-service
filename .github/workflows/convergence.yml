@@ -35,7 +35,7 @@ jobs:
         run: bash scripts/codex-environment.sh maintenance
 
       - name: Conformance
-        uses: moritzbrantner/coding-tooling@54b6ae146fc8795022283012ce1fd58686cd4b9a
+        uses: moritzbrantner/coding-tooling@2ceb2b57c946fd042fdf098c05427519c146a62f
         with:
           operation: conformance
           bun-version: latest
@@ -43,7 +43,7 @@ jobs:
 
       - name: Foundation audit
         if: ${{ always() }}
-        uses: moritzbrantner/coding-tooling@54b6ae146fc8795022283012ce1fd58686cd4b9a
+        uses: moritzbrantner/coding-tooling@2ceb2b57c946fd042fdf098c05427519c146a62f
         with:
           operation: foundation
           bun-version: latest
@@ -51,7 +51,7 @@ jobs:
 
       - name: Deterministic findings
         if: ${{ always() }}
-        uses: moritzbrantner/coding-tooling@54b6ae146fc8795022283012ce1fd58686cd4b9a
+        uses: moritzbrantner/coding-tooling@2ceb2b57c946fd042fdf098c05427519c146a62f
         with:
           operation: findings
           bun-version: latest
