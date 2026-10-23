@@ -252,7 +252,7 @@ cargo test --all-targets --all-features --locked
 cargo build --release --locked
 ```
 
-Browser modules/tests and performance guardrails run in the same read-only CI validation workflow. `Cargo.lock` is committed, and CI uses the exact Rust `1.98.0` toolchain.
+Browser modules/tests and performance guardrails run in the same read-only CI validation workflow. `Cargo.lock` is committed, and CI uses the stable Rust toolchain.
 
 ## Final hardening and browser acceptance
 
