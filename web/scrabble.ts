@@ -1,4 +1,4 @@
-const pages = new URL("https://moritzbrantner.github.io/scrabble/");
+const scrabble = new URL("https://scrabble.moenarch.com/scrabble/");
 const params = new URLSearchParams(location.search);
 const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(
   location.hostname,
@@ -55,7 +55,7 @@ function showSession() {
   refresh.hidden = false;
 }
 function gameUrl(view: "board" | "player", lobby: string) {
-  const url = new URL(pages);
+  const url = new URL(scrabble);
   url.searchParams.set("launch", "moenarch");
   url.searchParams.set("session", lobby);
   if (view === "player" && match) {
@@ -187,7 +187,7 @@ window.addEventListener("message", async (event: MessageEvent<unknown>) => {
     !host ||
     !session ||
     binding ||
-    event.origin !== pages.origin ||
+    event.origin !== scrabble.origin ||
     event.source !== boardWindow
   ) {
     return;

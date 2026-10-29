@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-// This tests the real launcher + setup service boundary. The controlled Pages
+// This tests the real launcher + setup service boundary. The controlled Scrabble
 // popup deliberately implements only its public postMessage protocol. Actual
 // Rust Scrabble/WebTransport gameplay remains scrabble#80 acceptance.
-const pages = "https://moritzbrantner.github.io/scrabble/";
+const scrabble = "https://scrabble.moenarch.com/scrabble/";
 const setupApi = "http://127.0.0.1:8787";
 const launcher = "/scrabble.html?setupApi=" + encodeURIComponent(setupApi);
 
@@ -37,10 +37,10 @@ test(family + ": host binds one public match, rejects forged messages, guests sh
       registrations.push(request.postDataJSON());
   });
   for (const context of [hostContext, guestContext]) {
-    await context.route("https://moritzbrantner.github.io/**", (route) =>
+    await context.route("https://scrabble.moenarch.com/**", (route) =>
       route.fulfill({
         contentType: "text/html",
-        body: "<!doctype html><title>Controlled Scrabble Pages protocol peer</title><p>Scrabble boundary fixture</p>",
+        body: "<!doctype html><title>Controlled Scrabble protocol peer</title><p>Scrabble boundary fixture</p>",
       }),
     );
   }
@@ -75,7 +75,7 @@ test(family + ": host binds one public match, rejects forged messages, guests sh
     const board = await popupEvent;
     await board.waitForLoadState();
     const boardUrl = new URL(board.url());
-    expect(boardUrl.origin + boardUrl.pathname).toBe(pages.slice(0, -1) + "/");
+    expect(boardUrl.origin + boardUrl.pathname).toBe(scrabble.slice(0, -1) + "/");
     expect(Object.fromEntries(boardUrl.searchParams)).toEqual({
       launch: "moenarch",
       session,
@@ -96,7 +96,7 @@ test(family + ": host binds one public match, rejects forged messages, guests sh
     await report(board, { ...message, match: "b_000000006ac18f30_0123456789abcdef0123456789abcdef\n" });
     // A correct origin and session cannot authorize a different popup.
     const unrelatedEvent = host.waitForEvent("popup");
-    await host.evaluate((url) => window.open(url), pages + "?unrelated=1");
+    await host.evaluate((url) => window.open(url), scrabble + "?unrelated=1");
     const unrelated = await unrelatedEvent;
     await unrelated.waitForLoadState();
     await report(unrelated, message);
@@ -164,7 +164,7 @@ test(family + ": host binds one public match, rejects forged messages, guests sh
     const player = await playerEvent;
     await player.waitForLoadState();
     const playerUrl = new URL(player.url());
-    expect(playerUrl.origin + playerUrl.pathname).toBe(pages);
+    expect(playerUrl.origin + playerUrl.pathname).toBe(scrabble);
     expect(Object.fromEntries(playerUrl.searchParams)).toEqual({
       launch: "moenarch",
       session,
