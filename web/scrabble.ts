@@ -1,4 +1,4 @@
-const scrabble = new URL("https://scrabble.moenarch.com/scrabble/");
+const scrabble = new URL("https://moenarch.com/scrabble/");
 const params = new URLSearchParams(location.search);
 const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(
   location.hostname,

@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 // This tests the real launcher + setup service boundary. The controlled Scrabble
 // popup deliberately implements only its public postMessage protocol. Actual
 // Rust Scrabble/WebTransport gameplay remains scrabble#80 acceptance.
-const scrabble = "https://scrabble.moenarch.com/scrabble/";
+const scrabble = "https://moenarch.com/scrabble/";
 const setupApi = "http://127.0.0.1:8787";
 const launcher = "/scrabble.html?setupApi=" + encodeURIComponent(setupApi);
 
@@ -37,7 +37,7 @@ test(family + ": host binds one public match, rejects forged messages, guests sh
       registrations.push(request.postDataJSON());
   });
   for (const context of [hostContext, guestContext]) {
-    await context.route("https://scrabble.moenarch.com/**", (route) =>
+    await context.route("https://moenarch.com/**", (route) =>
       route.fulfill({
         contentType: "text/html",
         body: "<!doctype html><title>Controlled Scrabble protocol peer</title><p>Scrabble boundary fixture</p>",
