@@ -22,24 +22,24 @@ unknown/expired lobby. Malformed references return 400. Missing/mismatched
 capabilities return 401, a valid non-host capability 403. Renewal preserves the
 binding. Binding lifetime follows its lobby; process restart discards it along
 with the in-memory lobby. No binding extends Scrabble's independently owned
-six-hour lifecycle. A previously issued canonical Pages match invitation works
+six-hour lifecycle. A previously issued canonical Scrabble match invitation works
 without another setup-service lookup after lobby expiry.
 
 ## Launcher browser boundary
 
 `/scrabble.html` offers **Create Scrabble lobby**, then **Open Scrabble board**
 and a public **Invite link**. The host capability remains in memory on this
-page. The board opens at the fixed trusted Pages origin:
-`https://moritzbrantner.github.io/scrabble/?launch=moenarch&session=<lobby>&view=board`.
-The Pages board creates the real game and retains its creation nonce itself.
+page. The board opens at the fixed trusted Scrabble origin:
+`https://scrabble.moenarch.com/scrabble/?launch=moenarch&session=<lobby>&view=board`.
+The Scrabble board creates the real game and retains its creation nonce itself.
 It reports only `{type:"scrabble-match-created",session,match}` to the fixed
-launcher origin via postMessage. The launcher requires the exact Pages origin,
+launcher origin via postMessage. The launcher requires the exact Scrabble origin,
 its exact opened board window, matching session and canonical public match ID
 before authenticated binding. No board claim nonce or participant credential
 crosses this message boundary. Retrying Open reuses the original board popup.
 
 A guest opens the launcher invite and **Open Scrabble player** opens
-`https://moritzbrantner.github.io/scrabble/?launch=moenarch&session=<lobby>&match=<match>&view=player`.
+`https://scrabble.moenarch.com/scrabble/?launch=moenarch&session=<lobby>&match=<match>&view=player`.
 Reloading the launcher loses host capability and resolves the existing public
 binding; it must never silently create another board/game. Production API
 configuration stays fixed; `setupApi` may override the setup service only when
@@ -52,7 +52,7 @@ the launcher itself runs on loopback, solely for local acceptance.
   bounded references, immutable concurrent registration, renewal, 60-second expiry and process restart.
 - `bun run --cwd web build`, then the repository browser runner with
   `scrabble-launcher.spec.ts`: real launcher, real setup service, two isolated
-  Chromium contexts, controlled Pages popup preserving real cross-origin
+  Chromium contexts, controlled Scrabble popup preserving real cross-origin
   postMessage semantics. It rejects wrong origin/source/session/match, resolves
   one reference for guests, retries/reloads without duplicating a board, and
   checks capabilities do not enter URLs/local/session storage. No retained trace
@@ -66,7 +66,7 @@ the launcher itself runs on loopback, solely for local acceptance.
   preserves identity, and canonical match link survives setup-lobby expiry.
   These are required before declaring the complete owner journey passed.
 - After merge/deployment, verify revision at moenarch.com and repeat the actual
-  board/two-player journey through the published Pages app. A reachable launcher
+  board/two-player journey through the published `scrabble.moenarch.com` app. A reachable launcher
   or green boundary fixture alone is not live acceptance.
 
 ## Baseline observations
@@ -120,7 +120,7 @@ unchanged TTL wait. Strict malformed-p framing extends the existing rejection
 matrix. The launcher browser journey is parameterized over legacy and configured
 IDs in both existing desktop/touch projects. Every source/origin/session check,
 retry/reload/player route and credential-privacy assertion remains; the controlled
-Pages protocol peer still does not claim actual gameplay.
+Scrabble protocol peer still does not claim actual gameplay.
 
 Authoring baseline: `ce257ee1aba03e99c31f889a5c822bdf75e34ace`. Focused native
 execution genuinely fails: the real service returns 400 for a well-formed

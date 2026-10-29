@@ -41,8 +41,7 @@ const DEFAULT_MAX_LOBBIES: usize = 10_000;
 const MAX_MAX_ROOMS: usize = 100_000;
 const MAX_LOBBY_PARTICIPANTS: usize = 16;
 const LOBBY_MAX_TTL_MULTIPLIER: u32 = 6;
-const DEFAULT_ALLOWED_ORIGINS: &str =
-    "https://moritzbrantner.github.io,http://localhost:*,http://127.0.0.1:*";
+const DEFAULT_ALLOWED_ORIGINS: &str = "https://scrabble.moenarch.com,https://moritzbrantner.github.io,http://localhost:*,http://127.0.0.1:*";
 
 #[derive(Clone)]
 struct AppState {
