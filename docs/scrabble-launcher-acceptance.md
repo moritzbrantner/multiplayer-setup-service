@@ -30,7 +30,7 @@ without another setup-service lookup after lobby expiry.
 `/scrabble.html` offers **Create Scrabble lobby**, then **Open Scrabble board**
 and a public **Invite link**. The host capability remains in memory on this
 page. The board opens at the fixed trusted Scrabble origin:
-`https://scrabble.moenarch.com/scrabble/?launch=moenarch&session=<lobby>&view=board`.
+`https://moenarch.com/scrabble/?launch=moenarch&session=<lobby>&view=board`.
 The Scrabble board creates the real game and retains its creation nonce itself.
 It reports only `{type:"scrabble-match-created",session,match}` to the fixed
 launcher origin via postMessage. The launcher requires the exact Scrabble origin,
@@ -39,7 +39,7 @@ before authenticated binding. No board claim nonce or participant credential
 crosses this message boundary. Retrying Open reuses the original board popup.
 
 A guest opens the launcher invite and **Open Scrabble player** opens
-`https://scrabble.moenarch.com/scrabble/?launch=moenarch&session=<lobby>&match=<match>&view=player`.
+`https://moenarch.com/scrabble/?launch=moenarch&session=<lobby>&match=<match>&view=player`.
 Reloading the launcher loses host capability and resolves the existing public
 binding; it must never silently create another board/game. Production API
 configuration stays fixed; `setupApi` may override the setup service only when
@@ -66,7 +66,7 @@ the launcher itself runs on loopback, solely for local acceptance.
   preserves identity, and canonical match link survives setup-lobby expiry.
   These are required before declaring the complete owner journey passed.
 - After merge/deployment, verify revision at moenarch.com and repeat the actual
-  board/two-player journey through the published `scrabble.moenarch.com` app. A reachable launcher
+  board/two-player journey through the published `moenarch.com/scrabble/` app. A reachable launcher
   or green boundary fixture alone is not live acceptance.
 
 ## Baseline observations

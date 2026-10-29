@@ -154,7 +154,7 @@ Environment variables:
 | `CLEANUP_INTERVAL_SECONDS` | `30` | Expired-state sweep interval |
 | `MAX_ROOMS` | `10000` | Hard in-memory room cap |
 | `MAX_LOBBIES` | `10000` | Hard in-memory lobby cap |
-| `ALLOWED_ORIGINS` | `scrabble.moenarch.com`, GitHub Pages + localhost patterns | Comma-separated browser origins |
+| `ALLOWED_ORIGINS` | `moenarch.com`, GitHub Pages + localhost patterns | Comma-separated browser origins |
 | `TURN_URLS` | unset | Optional comma-separated `turn:` / `turns:` URLs returned to authenticated participants |
 | `TURN_SHARED_SECRET` | unset | Optional coturn REST-auth shared secret; server-side only |
 | `TURN_CREDENTIAL_TTL_SECONDS` | `600` | Temporary credential lifetime, clamped to 60–3600 seconds |
@@ -229,7 +229,7 @@ invite and choose Open Scrabble player; if the board is still creating the game,
 choose Check for game when it is ready. A host may also open a player screen.
 
 The launcher trusts only its opened board window at
-`https://scrabble.moenarch.com`, the same setup session, and a canonical match
+`https://moenarch.com`, the same setup session, and a canonical match
 ID. Host credentials stay in launcher memory. Reloading loses host authority and
 resolves the existing reference. Repeated Open reuses the board; a closed board
 must be recovered through its original address rather than silently creating
