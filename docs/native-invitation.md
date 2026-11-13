@@ -47,6 +47,7 @@ Scrabble-only game-reference endpoint. Missing/expired lobbies, full lobbies,
 invalid metadata and unavailable services produce actionable messages; users
 can check again. The API's 404 cannot distinguish missing from expired.
 
+The API reports `expiresAt` as Unix milliseconds, compared directly to `Date.now()`.
 Public counts and expiry establish only that setup metadata exists. They do not
 bind the supplied match to that lobby, prove host health/readiness, or prove
 revocation/authorization state. Native joining must recheck current state and

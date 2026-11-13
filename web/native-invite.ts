@@ -61,7 +61,7 @@ export async function checkNativeInvitation(
   ) {
     throw new NativeInvitationError("The lobby service returned invalid metadata. Try checking again.");
   }
-  if (data.expiresAt * 1000 <= now) {
+  if (data.expiresAt <= now) {
     throw new NativeInvitationError("This lobby has expired. Ask the host for a new invitation.");
   }
   if (data.participantCount === data.maxParticipants) {
