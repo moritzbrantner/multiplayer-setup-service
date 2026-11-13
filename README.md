@@ -243,6 +243,15 @@ only on loopback for local acceptance. Build the browser assets with
 The independent boundary contract and its gameplay/live-verification limits are
 in [Scrabble launcher acceptance](docs/scrabble-launcher-acceptance.md).
 
+### Native world invitations
+
+`/native.html?lobbyId=<public-lobby-id>&matchId=<public-match-id>` checks public
+lobby metadata without joining or reserving a seat and offers native client
+setup instructions. Native invitation joining is planned for MMORPG stage 5;
+this landing page does not establish host readiness or grant gameplay access.
+See [the exact native handoff contract](docs/native-invitation.md) for the agreed
+`--join-invite` consumer argument, validation and deployment limits.
+
 ## Development and validation
 
 ```bash
