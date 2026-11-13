@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Native world invitation</title>
+    <link rel="stylesheet" href="./common.css" />
+    <script type="module" src="./native.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>World invitation</h1>
+      <section class="panel" aria-label="Invitation">
+        <p id="status" role="status">Checking invitation…</p>
+        <button id="refresh" type="button">Check invitation again</button>
+        <div id="handoff" hidden>
+          <p>This world uses the native MMORPG client. Native invitation joining is still being integrated; opening this page does not connect you to the world.</p>
+          <label for="invitation">Invitation for the native client
+            <input id="invitation" type="text" readonly spellcheck="false" />
+          </label>
+          <p>Select and copy this address to keep your invitation. Ask the host for a compatible client build and join instructions.</p>
+          <p>Building from source? Follow the <a href="https://github.com/moenarch-games/mmorpg/blob/main/docs/NATIVE_CLIENT.md">native client setup instructions</a>. Source builds also need the upcoming invitation support.</p>
+        </div>
+      </section>
+      <noscript><p>Enable JavaScript to check the invitation, or ask the host for native client instructions.</p></noscript>
+      <p><a href="./">Back</a></p>
+    </main>
+  </body>
+</html>
